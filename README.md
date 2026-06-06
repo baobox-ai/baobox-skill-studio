@@ -20,3 +20,9 @@ Two platform rules drive the architecture:
 
 npm workspaces; each package publishes independently via a tag-driven release
 (`<pkg>-v<semver>` → GitHub Actions → npm), mirroring `@baobox/sdk`.
+
+## Integrating
+
+New tenant? Follow **[SKILL_STUDIO_INTEGRATION.md](./SKILL_STUDIO_INTEGRATION.md)** —
+the two-step onboarding (mount the BFF, embed the Web Component), the HTTP
+contract shapes, and a "working E2E" checklist.
