@@ -1,0 +1,83 @@
+{
+  "name": "@baobox/skill-builder",
+  "version": "0.1.0",
+  "description": "Framework-agnostic <baobox-skill-builder> Web Component for the BaoBox Skill Studio. Reads from a configurable api-base (the tenant BFF) via @baobox/skill-builder-contract.",
+  "license": "MIT",
+  "author": "Bright Qi <bright@adoptive.co>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baobox-ai/baobox-skill-studio.git",
+    "directory": "packages/web"
+  },
+  "homepage": "https://github.com/baobox-ai/baobox-skill-studio/tree/main/packages/web#readme",
+  "bugs": {
+    "url": "https://github.com/baobox-ai/baobox-skill-studio/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./standalone": "./dist/standalone/baobox-skill-builder.js"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "vite",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "dependencies": {
+    "@baobox/skill-builder-contract": "^0.1.0",
+    "preact": "^10.24.0"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "react-dom": { "optional": true }
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.9.0",
+    "@testing-library/preact": "^3.2.4",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.0",
+    "jsdom": "^25.0.0",
+    "react": "^18.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^6.0.0",
+    "vitest": "^2.1.4"
+  },
+  "keywords": [
+    "baobox",
+    "skill-studio",
+    "web-component",
+    "custom-element",
+    "preact",
+    "micro-frontend"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
