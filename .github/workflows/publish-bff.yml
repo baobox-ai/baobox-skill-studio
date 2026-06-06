@@ -1,0 +1,29 @@
+name: Publish @baobox/skill-builder-bff
+
+# Tag-driven release: push a `bff-v0.1.0` tag → npm publish fires for the bff
+# workspace. Per-package tag prefix so each package releases independently.
+on:
+  push:
+    tags: ["bff-v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install
+      - run: npm run typecheck --workspace @baobox/skill-builder-bff
+      - run: npm test --workspace @baobox/skill-builder-bff
+      - run: npm run build --workspace @baobox/skill-builder-bff
+      - name: npm publish
+        run: npm publish --provenance --access public --workspace @baobox/skill-builder-bff
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

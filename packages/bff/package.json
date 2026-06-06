@@ -1,0 +1,66 @@
+{
+  "name": "@baobox/skill-builder-bff",
+  "version": "0.1.0",
+  "description": "Mountable Hono BFF router for the BaoBox Skill Studio — wraps @baobox/sdk (adminSecret, tenant-scoped) and serves the @baobox/skill-builder-contract surface.",
+  "license": "MIT",
+  "author": "Bright Qi <bright@adoptive.co>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baobox-ai/baobox-skill-studio.git",
+    "directory": "packages/bff"
+  },
+  "homepage": "https://github.com/baobox-ai/baobox-skill-studio/tree/main/packages/bff#readme",
+  "bugs": {
+    "url": "https://github.com/baobox-ai/baobox-skill-studio/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "dependencies": {
+    "@baobox/sdk": "^0.14.0",
+    "@baobox/skill-builder-contract": "^0.1.0"
+  },
+  "peerDependencies": {
+    "hono": ">=4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "hono": "^4.6.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.4"
+  },
+  "keywords": [
+    "baobox",
+    "skill-studio",
+    "bff",
+    "hono",
+    "backend-for-frontend"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
