@@ -1,0 +1,31 @@
+name: Publish @baobox/skill-builder
+
+# Tag-driven release: push a `web-v0.1.0` tag → npm publish fires for the web
+# workspace. Per-package tag prefix so each package releases independently.
+on:
+  push:
+    tags: ["web-v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install
+      # Build all workspaces (contract first) so the web package can resolve the
+      # contract's emitted types for typecheck/build/publish.
+      - run: npm run build
+      - run: npm run typecheck --workspace @baobox/skill-builder
+      - run: npm test --workspace @baobox/skill-builder
+      - name: npm publish
+        run: npm publish --provenance --access public --workspace @baobox/skill-builder
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
