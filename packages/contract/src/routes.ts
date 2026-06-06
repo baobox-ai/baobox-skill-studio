@@ -10,6 +10,21 @@
 //   PATCH /skills/:id    → SkillDetailResponse  (single-field edit)
 export const SKILL_STUDIO_BASE_PATH = "/skills" as const;
 
+//
+// Phase 2 (#258) ADDS the authoring ops below. All additive — the three Phase-1
+// entries keep their exact method+path so existing builds don't drift:
+//   POST   /skills                         → SkillDetailResponse   (create, tenant-owned)
+//   PUT    /skills/:id                      → SkillDetailResponse   (structural multi-field update)
+//   GET    /skills/:id/attached-skills      → ListAttachedSkillsResponse
+//   POST   /skills/:id/attached-skills      → AttachAckResponse     (body: { childSkillId })
+//   DELETE /skills/:id/attached-skills/:childId → DetachAckResponse
+//   GET    /skills/:id/tools                → ListSkillToolsResponse
+//   POST   /skills/:id/tools                → AttachAckResponse     (body: { toolId })
+//   DELETE /skills/:id/tools/:toolId        → DetachAckResponse
+//   GET    /skills/:id/parameters           → { data: SkillParameter[] }
+//   PUT    /skills/:id/parameters           → { data: SkillParameter[] } (body: { parameters })
+const enc = encodeURIComponent;
+
 export const skillStudioRoutes = {
   listSkills: {
     method: "GET",
@@ -18,12 +33,68 @@ export const skillStudioRoutes = {
   getSkill: {
     method: "GET",
     path: "/skills/:id",
-    build: (id: string): string => `/skills/${encodeURIComponent(id)}`,
+    build: (id: string): string => `/skills/${enc(id)}`,
   },
+  // Phase-1 single-field edit (unchanged).
   updateSkill: {
     method: "PATCH",
     path: "/skills/:id",
-    build: (id: string): string => `/skills/${encodeURIComponent(id)}`,
+    build: (id: string): string => `/skills/${enc(id)}`,
+  },
+  // Phase 2 — create (tenant-owned).
+  createSkill: {
+    method: "POST",
+    path: "/skills",
+  },
+  // Phase 2 — structural multi-field update.
+  updateSkillStructural: {
+    method: "PUT",
+    path: "/skills/:id",
+    build: (id: string): string => `/skills/${enc(id)}`,
+  },
+  // Phase 2 — orchestrator sub-skill graph.
+  listAttachedSkills: {
+    method: "GET",
+    path: "/skills/:id/attached-skills",
+    build: (id: string): string => `/skills/${enc(id)}/attached-skills`,
+  },
+  attachSubSkill: {
+    method: "POST",
+    path: "/skills/:id/attached-skills",
+    build: (id: string): string => `/skills/${enc(id)}/attached-skills`,
+  },
+  detachSubSkill: {
+    method: "DELETE",
+    path: "/skills/:id/attached-skills/:childId",
+    build: (id: string, childId: string): string =>
+      `/skills/${enc(id)}/attached-skills/${enc(childId)}`,
+  },
+  // Phase 2 — tool wiring.
+  listSkillTools: {
+    method: "GET",
+    path: "/skills/:id/tools",
+    build: (id: string): string => `/skills/${enc(id)}/tools`,
+  },
+  attachTool: {
+    method: "POST",
+    path: "/skills/:id/tools",
+    build: (id: string): string => `/skills/${enc(id)}/tools`,
+  },
+  detachTool: {
+    method: "DELETE",
+    path: "/skills/:id/tools/:toolId",
+    build: (id: string, toolId: string): string => `/skills/${enc(id)}/tools/${enc(toolId)}`,
+  },
+  // Phase 2 — per-tenant parameters.
+  getSkillParameters: {
+    method: "GET",
+    path: "/skills/:id/parameters",
+    build: (id: string): string => `/skills/${enc(id)}/parameters`,
+  },
+  setSkillParameters: {
+    method: "PUT",
+    path: "/skills/:id/parameters",
+    build: (id: string): string => `/skills/${enc(id)}/parameters`,
   },
 } as const;
 

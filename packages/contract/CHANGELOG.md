@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0
+
+Phase-2 authoring surface (#258). **Backward compatible** — every Phase-1 shape
+and route (`listSkills`, `getSkill`, `PATCH updateSkill`, the summary/detail/
+single-field-update schemas and response envelopes) is unchanged.
+
+### Added
+
+- **Routes** (`skillStudioRoutes`): `createSkill` (POST /skills),
+  `updateSkillStructural` (PUT /skills/:id), `listAttachedSkills` / `attachSubSkill`
+  (POST, body `{ childSkillId }`) / `detachSubSkill` (DELETE …/:childId),
+  `listSkillTools` / `attachTool` (POST, body `{ toolId }`) / `detachTool`
+  (DELETE …/:toolId), and `getSkillParameters` / `setSkillParameters`.
+- **Schemas + types**: `skillCreateRequestSchema`, `skillStructuralUpdateRequestSchema`
+  (multi-field, ≥1, `.strict()`), `attachSubSkillRequestSchema`,
+  `attachToolRequestSchema`, `skillParameterSchema` / `setSkillParametersRequestSchema`,
+  and lean read projections `skillToolSummarySchema` + the new response envelopes
+  (`attachAckResponseSchema`, `detachAckResponseSchema`,
+  `listAttachedSkillsResponseSchema`, `listSkillToolsResponseSchema`).
+- **Contract error shape**: `contractErrorSchema` + `contractErrorCodeSchema`
+  (`validation_error` / `cycle_detected` / `tool_not_allowed` / `forbidden` /
+  `not_found` / `conflict` / `upstream_error` / `internal_error`) so the Web
+  Component branches on a stable `code` (e.g. render a clear "would create a
+  cycle" or "tool not permitted" message).
+- Compile-time drift guards tying the create/structural-update editable fields to
+  `@baobox/sdk`'s `Skill`.
+
 ## 0.1.0
 
 Initial release — the Phase-1 BFF↔MFE contract for the BaoBox Skill Studio
