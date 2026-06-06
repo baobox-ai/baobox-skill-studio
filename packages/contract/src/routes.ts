@@ -33,13 +33,13 @@ export const skillStudioRoutes = {
   getSkill: {
     method: "GET",
     path: "/skills/:id",
-    build: (id: string): string => `/skills/${enc(id)}`,
+    build: (id: string): string => `/skills/${encodeURIComponent(id)}`,
   },
   // Phase-1 single-field edit (unchanged).
   updateSkill: {
     method: "PATCH",
     path: "/skills/:id",
-    build: (id: string): string => `/skills/${enc(id)}`,
+    build: (id: string): string => `/skills/${encodeURIComponent(id)}`,
   },
   // Phase 2 — create (tenant-owned).
   createSkill: {
