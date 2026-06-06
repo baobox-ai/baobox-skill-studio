@@ -20,9 +20,11 @@ jobs:
           cache: npm
           registry-url: "https://registry.npmjs.org"
       - run: npm install
+      # Build all workspaces (contract before bff) so the bff can resolve the
+      # contract's emitted types for typecheck/test/publish.
+      - run: npm run build
       - run: npm run typecheck --workspace @baobox/skill-builder-bff
       - run: npm test --workspace @baobox/skill-builder-bff
-      - run: npm run build --workspace @baobox/skill-builder-bff
       - name: npm publish
         run: npm publish --provenance --access public --workspace @baobox/skill-builder-bff
         env:

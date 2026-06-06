@@ -17,6 +17,9 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm install
+      # Build first: packages depend on each other's emitted .d.ts (e.g. the BFF
+      # resolves @baobox/skill-builder-contract's types from its dist), and the
+      # `workspaces` order builds the contract before its dependents.
+      - run: npm run build
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build
