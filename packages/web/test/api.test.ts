@@ -15,7 +15,7 @@ const summary = { id: "sk_1", name: "One", description: "d", model: "MiniMax-M2.
 const detail = { ...summary, systemPrompt: "p", temperature: 0.7, maxTokens: 4096, sourceUrl: null, createdAt: "x", files: [] };
 
 describe("createApi", () => {
-  it("listSkills GETs {base}/skills and unwraps data — with NO credentials", async () => {
+  it("listSkills GETs {base}/skills and unwraps data — same-origin credentials only", async () => {
     const seen: { url?: string; init?: RequestInit } = {};
     const api = createApi(
       "https://tenant.example.com/api/skill-studio",
@@ -29,8 +29,9 @@ describe("createApi", () => {
     const skills = await api.listSkills();
     expect(seen.url).toBe("https://tenant.example.com/api/skill-studio/skills");
     expect(seen.init?.method).toBe("GET");
-    // The browser must NOT send cookies/credentials to the BFF.
-    expect(seen.init?.credentials).toBe("omit");
+    // same-origin: the session reaches a same-origin BFF for authz, but the
+    // browser never sends cookies cross-origin (and never to BaoBox).
+    expect(seen.init?.credentials).toBe("same-origin");
     expect(skills[0]?.id).toBe("sk_1");
   });
 

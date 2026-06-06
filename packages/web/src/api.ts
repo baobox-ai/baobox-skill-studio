@@ -53,10 +53,11 @@ export function createApi(apiBase: string, fetchImpl?: FetchFn): SkillStudioApi 
         Accept: "application/json",
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
-      // Explicitly omit credentials — not merely "don't include". The browser
-      // default is `same-origin`, so a same-origin BFF could otherwise attach
-      // cookies; `omit` guarantees the browser carries no session to the BFF.
-      credentials: "omit",
+      // `same-origin`: send the host's tenant session ONLY to a same-origin BFF
+      // (the recommended setup) so the BFF's authz hook can identify the user —
+      // never cross-origin, and never to BaoBox (the element never calls it). A
+      // cross-origin BFF gets no cookies and must use a non-cookie auth path.
+      credentials: "same-origin",
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     const text = await res.text();

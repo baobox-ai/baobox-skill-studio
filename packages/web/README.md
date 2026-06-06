@@ -59,8 +59,10 @@ const api = createApi("/api/skill-studio"); // contract-typed client, no cookies
 
 ## How it talks to the BFF
 
-All requests go to `api-base` using the #246 contract, with **no**
-`credentials: "include"` — the BFF is the auth boundary:
+All requests go to `api-base` using the #246 contract with
+`credentials: "same-origin"` — the host's tenant session reaches a same-origin
+BFF (so its `authz` hook can identify the user), but nothing is sent
+cross-origin and the element never calls BaoBox. The BFF is the auth boundary:
 
 | Element action | Request                  |
 | -------------- | ------------------------ |
