@@ -1,6 +1,6 @@
 {
   "name": "@baobox/skill-builder-bff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Mountable Hono BFF router for the BaoBox Skill Studio — wraps @baobox/sdk (adminSecret, tenant-scoped) and serves the @baobox/skill-builder-contract surface.",
   "license": "MIT",
   "author": "Bright Qi <bright@adoptive.co>",
@@ -41,7 +41,7 @@
     "prepublishOnly": "npm run clean && npm run build && npm test"
   },
   "dependencies": {
-    "@baobox/sdk": "^0.14.0",
+    "@baobox/sdk": "^0.15.0",
     "@baobox/skill-builder-contract": "^0.1.0"
   },
   "peerDependencies": {

@@ -3,7 +3,8 @@
 The **Backend-for-Frontend** for the BaoBox **Skill Studio**. A mountable
 [Hono](https://hono.dev) router the tenant's own backend mounts; it is the only
 thing that performs real BaoBox operations — **through `@baobox/sdk`**
-(adminSecret), server-side, scoped to one tenant.
+(a per-tenant `apiKey`, or a legacy `adminSecret`), server-side, scoped to one
+tenant.
 
 The embedded `<baobox-skill-builder>` Web Component (`@baobox/skill-builder`,
 #249) calls **this** router (never BaoBox). It implements the
@@ -31,7 +32,7 @@ const app = new Hono();
 
 const skillStudio = createSkillBuilderBff({
   endpoint: env.BAOBOX_ENDPOINT,     // your BaoBox worker URL
-  adminSecret: env.BAOBOX_ADMIN_SECRET, // stays server-side, never sent to the browser
+  apiKey: env.BAOBOX_SKILLS_KEY,     // per-tenant key (recommended) — server-side only
   tenantId: "t_acme",                // every call is scoped to this tenant (#247)
   hooks: {
     authz: ({ op, skillId }) => currentUserMayEdit(op, skillId), // false → 403
@@ -62,7 +63,9 @@ then re-fetches the detail so the response carries files.
 ```ts
 createSkillBuilderBff({
   endpoint: string,
-  adminSecret: string,
+  // EXACTLY ONE credential (server-side only):
+  apiKey?: string,       // per-tenant key with skills:read/skills:write — RECOMMENDED (#254)
+  adminSecret?: string,  // cross-tenant admin secret — legacy; reaches every tenant
   tenantId: string,
   hooks?: {
     authz?: (ctx: { op, tenantId, skillId? }) => boolean | void | Promise<…>,  // false/throw → 403
@@ -87,18 +90,21 @@ Per request: **authz → SDK call → audit → contract-shaped response.**
   hook you must explicitly set **`allowUnauthenticated: true`** — and only when
   another layer already authorizes callers (upstream middleware / trusted
   internal network). A forgotten hook can never silently expose skill read/write.
-- `adminSecret` is held server-side and **never appears in any response or
-  error** — error messages are mapped from the SDK's status/code and the secret
-  value is additionally redacted as a backstop.
+- **Per-tenant credential (#254 AC1).** Prefer `apiKey` — a tenant-bound BaoBox
+  key carrying `skills:read` / `skills:write`. The credential itself enforces the
+  tenant boundary, so a breached/buggy BFF can never reach another tenant's
+  skills (the `X-BaoBox-Tenant-Id` scope becomes belt-and-suspenders). The legacy
+  `adminSecret` is cross-tenant — only use it where a single shared credential is
+  acceptable. Exactly one of `apiKey` / `adminSecret` is required.
+- The credential is held server-side and **never appears in any response or
+  error** — error messages are mapped from the SDK's status/code and the value
+  (apiKey or adminSecret) is additionally redacted as a backstop.
 - Every call is **tenant-scoped** (`#247`): a skill owned by another tenant
   returns **404**, never another tenant's data.
 - `authz` denial short-circuits **before** any BaoBox call and returns **403**.
 
-> ⚠️ Multi-tenant note (#254): Phase-1 scoping uses the cross-tenant
-> `adminSecret` + the `X-BaoBox-Tenant-Id` header the SDK sends. That is fine for
-> a single-tenant staging walking skeleton, but **before a second tenant or
-> production** the BFF must authenticate with a **per-tenant credential** so the
-> key itself enforces the boundary. Tracked in baobox#254.
+> `apiKey` mode requires `@baobox/sdk` >= 0.15.0 and a BaoBox server with #254
+> worker support (a tenant-bound key authorized for the skill routes).
 
 ## Versioning
 

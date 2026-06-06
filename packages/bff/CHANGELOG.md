@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.0
+
+Per-tenant credential (#254 AC1).
+
+### Added
+
+- `apiKey` config option — a tenant-bound BaoBox key carrying
+  `skills:read` / `skills:write`. **Recommended** over `adminSecret`: the
+  credential itself enforces the tenant boundary, so a breached BFF can never
+  reach another tenant's skills. Requires `@baobox/sdk` >= 0.15.0 and a BaoBox
+  server with #254 worker support.
+- The redaction backstop now scrubs **both** credentials (`apiKey` and
+  `adminSecret`) from every outgoing error string.
+
+### Changed
+
+- `adminSecret` is now **optional**. Provide **exactly one** of `apiKey`
+  (recommended) or `adminSecret` — construction throws otherwise.
+- Bumped `@baobox/sdk` to `^0.15.0`.
+
+### Migration
+
+Replace `adminSecret: env.BAOBOX_ADMIN_SECRET` with
+`apiKey: env.BAOBOX_SKILLS_KEY` (a per-tenant key). The `adminSecret` path
+still works if you keep it.
+
 ## 0.1.0
 
 Initial release — the Phase-1 Skill Studio BFF router (Epic baobox#244, ν1.3 /

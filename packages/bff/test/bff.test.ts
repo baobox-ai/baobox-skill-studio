@@ -274,6 +274,24 @@ describe("createSkillBuilderBff — error mapping & secret hygiene", () => {
     expect(errBody).not.toContain("ADMIN_SECRET");
   });
 
+  it("never leaks a per-tenant apiKey — redacted from the error (#254)", async () => {
+    const API_KEY = "skb_tenant_key_DO-NOT-LEAK";
+    const stub = makeStub({
+      get: async () => {
+        throw new BaoBoxError(500, "code", `failed with ${API_KEY}`, `req_${API_KEY}`, null);
+      },
+    });
+    const app = createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      apiKey: API_KEY,
+      tenantId: TENANT,
+      client: stub.client,
+      allowUnauthenticated: true,
+    });
+    const errBody = await (await app.request("/skills/sk_1")).text();
+    expect(errBody).not.toContain(API_KEY);
+  });
+
   it("maps a non-HTTP error to 500 internal_error", async () => {
     const stub = makeStub({
       list: async () => {
@@ -287,6 +305,63 @@ describe("createSkillBuilderBff — error mapping & secret hygiene", () => {
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe("internal_error");
     expect(body.error.message).toBe("Internal error");
+  });
+});
+
+describe("createSkillBuilderBff — credential config (#254 AC1)", () => {
+  it("accepts a per-tenant apiKey (no adminSecret)", () => {
+    expect(() =>
+      createSkillBuilderBff({
+        endpoint: "https://baobox.example.com",
+        apiKey: "skb_tenant_key",
+        tenantId: TENANT,
+        allowUnauthenticated: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it("throws when BOTH apiKey and adminSecret are given", () => {
+    expect(() =>
+      createSkillBuilderBff({
+        endpoint: "https://baobox.example.com",
+        apiKey: "skb_tenant_key",
+        adminSecret: ADMIN_SECRET,
+        tenantId: TENANT,
+        allowUnauthenticated: true,
+      }),
+    ).toThrow(/exactly one/i);
+  });
+
+  it("throws when NEITHER apiKey nor adminSecret is given", () => {
+    expect(() =>
+      createSkillBuilderBff({
+        endpoint: "https://baobox.example.com",
+        tenantId: TENANT,
+        allowUnauthenticated: true,
+      } as Parameters<typeof createSkillBuilderBff>[0]),
+    ).toThrow(/exactly one/i);
+  });
+
+  it("still accepts an adminSecret-only caller without an injected client (back-compat)", () => {
+    expect(() =>
+      createSkillBuilderBff({
+        endpoint: "https://baobox.example.com",
+        adminSecret: ADMIN_SECRET,
+        tenantId: TENANT,
+        allowUnauthenticated: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it("treats a whitespace-only credential as absent → throws", () => {
+    expect(() =>
+      createSkillBuilderBff({
+        endpoint: "https://baobox.example.com",
+        apiKey: "   ",
+        tenantId: TENANT,
+        allowUnauthenticated: true,
+      }),
+    ).toThrow(/exactly one/i);
   });
 });
 
