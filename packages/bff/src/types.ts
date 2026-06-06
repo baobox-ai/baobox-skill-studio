@@ -57,14 +57,27 @@ export interface SkillStudioHooks {
 }
 
 /**
- * Config for `createSkillBuilderBff`. The BFF builds a `@baobox/sdk` client from
- * `{ endpoint, adminSecret }` and scopes every call to `tenantId` (#247). The
- * `adminSecret` lives here, server-side only — it is never echoed in any
- * response or error.
+ * Config for `createSkillBuilderBff`. The BFF builds a `@baobox/sdk` client and
+ * scopes every call to `tenantId` (#247). The credential lives here,
+ * server-side only — it is never echoed in any response or error.
+ *
+ * Provide EXACTLY ONE of `apiKey` (recommended) or `adminSecret`.
  */
 export interface SkillStudioBffConfig {
   endpoint: string;
-  adminSecret: string;
+  /**
+   * Per-tenant BaoBox API key (#254 AC1 — RECOMMENDED). A tenant-bound key
+   * carrying `skills:read` / `skills:write`. The credential itself enforces the
+   * tenant boundary, so this BFF can never reach another tenant's skills (the
+   * `tenantId` scope becomes belt-and-suspenders). Requires `@baobox/sdk`
+   * >= 0.15.0 and a BaoBox server with #254 worker support.
+   */
+  apiKey?: string;
+  /**
+   * Cross-tenant BaoBox admin secret (legacy). Functional, but it can reach
+   * EVERY tenant's skills — a breached BFF exposes them all. Prefer `apiKey`.
+   */
+  adminSecret?: string;
   tenantId: string;
   hooks?: SkillStudioHooks;
   /**

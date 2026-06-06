@@ -77,20 +77,41 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
         "allowUnauthenticated:true only if another layer already authorizes callers.",
     );
   }
-  const client =
-    config.client ??
-    new BaoBoxClient({
+  // #254 AC1 — authenticate to BaoBox with a per-tenant `apiKey` (recommended)
+  // or the legacy cross-tenant `adminSecret`. Exactly one is required (unless a
+  // pre-built `client` is injected for tests). Fail loud at construction rather
+  // than at the first request.
+  let client: BaoBoxClient;
+  if (config.client) {
+    client = config.client;
+  } else {
+    // `trim()` so a whitespace-only value isn't mistaken for a real credential
+    // (and never lands in `secrets`, where it would scrub spaces from errors).
+    const hasApiKey = typeof config.apiKey === "string" && config.apiKey.trim().length > 0;
+    const hasAdminSecret =
+      typeof config.adminSecret === "string" && config.adminSecret.trim().length > 0;
+    if (hasApiKey === hasAdminSecret) {
+      throw new Error(
+        "[skill-builder-bff] Provide exactly one of `apiKey` (recommended) or `adminSecret`.",
+      );
+    }
+    client = new BaoBoxClient({
       endpoint: config.endpoint,
-      adminSecret: config.adminSecret,
+      ...(hasApiKey ? { apiKey: config.apiKey } : { adminSecret: config.adminSecret }),
       ...(config.fetch ? { fetch: config.fetch } : {}),
     });
+  }
 
-  // Belt-and-braces: the adminSecret is never part of a BaoBoxError to begin
+  // Belt-and-braces: the credential is never part of a BaoBoxError to begin
   // with (it only lives in the request Authorization header), but since we know
-  // the value we scrub it from every outgoing message so it can NEVER surface
-  // in a response — even if a future upstream error were to echo it.
+  // the value we scrub BOTH possible credentials from every outgoing message so
+  // neither can EVER surface in a response — even if a future upstream error
+  // were to echo it.
+  const secrets = [config.apiKey, config.adminSecret].filter(
+    (s): s is string => typeof s === "string" && s.trim().length > 0,
+  );
   const redact = (msg: string): string =>
-    config.adminSecret ? msg.split(config.adminSecret).join("[redacted]") : msg;
+    secrets.reduce((acc, secret) => acc.split(secret).join("[redacted]"), msg);
 
   // Best-effort audit — a throwing/ rejecting audit hook never fails the request.
   async function audit(record: AuditRecord): Promise<void> {
