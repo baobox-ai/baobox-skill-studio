@@ -66,6 +66,17 @@ function toContractError(err: unknown): ContractError {
 export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
   const { tenantId } = config;
   const hooks: SkillStudioHooks = config.hooks ?? {};
+  // #254 — fail closed. Without an authz hook the BFF denies everything unless
+  // the host explicitly opts out. Warn loudly at mount so a forgotten hook is
+  // obvious in logs rather than silently bricking every request.
+  const allowUnauthenticated = config.allowUnauthenticated === true;
+  if (!hooks.authz && !allowUnauthenticated && typeof console !== "undefined") {
+    console.warn(
+      "[skill-builder-bff] No `hooks.authz` configured — running fail-closed: " +
+        "every request will be denied (403). Provide hooks.authz, or set " +
+        "allowUnauthenticated:true only if another layer already authorizes callers.",
+    );
+  }
   const client =
     config.client ??
     new BaoBoxClient({
@@ -95,7 +106,11 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
   // AuthzDenied → 403. A throw is treated as denial (not a 500) so a host can
   // `throw new Error("nope")` to reject; the message is preserved.
   async function authorize(op: SkillStudioOp, skillId?: string): Promise<void> {
-    if (!hooks.authz) return;
+    if (!hooks.authz) {
+      // Fail closed: no authz hook → deny, unless the host explicitly opted out.
+      if (allowUnauthenticated) return;
+      throw new AuthzDenied();
+    }
     let verdict: boolean | void;
     try {
       verdict = await hooks.authz({ op, tenantId, ...(skillId ? { skillId } : {}) });

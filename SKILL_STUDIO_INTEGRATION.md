@@ -14,7 +14,7 @@ Component pointed at that BFF.
 
 ```
 Browser:  <baobox-skill-builder api-base="/api/skill-studio">
-                       │  fetch (no cookies, no secrets)
+                       │  fetch (same-origin session; no BaoBox secrets)
                        ▼
 Your backend:  @baobox/skill-builder-bff  ──(adminSecret, tenant-scoped)──▶  BaoBox
                        via @baobox/sdk
@@ -61,8 +61,10 @@ const skillStudio = createSkillBuilderBff({
   adminSecret: env.BAOBOX_ADMIN_SECRET, // server-side only
   tenantId: "t_your_tenant",            // every call is scoped to this tenant (#247)
   hooks: {
-    // Deny by returning false OR throwing → the BFF responds 403, before any
-    // BaoBox call. Wire this to YOUR session/permission model.
+    // REQUIRED in practice — the BFF is FAIL-CLOSED: with no authz hook every
+    // request is denied (403). Wire this to YOUR session/permission model.
+    // (To run without one — only behind another auth layer — set
+    // `allowUnauthenticated: true` at the top level instead of a hook.)
     authz: ({ op, skillId }) => currentUserMayEdit(op, skillId),
     // Best-effort; a throw here never fails the request.
     audit: (record) => auditLog.write(record),
@@ -140,8 +142,10 @@ export function SkillsAdmin() {
 }
 ```
 
-The browser makes requests **only** to `api-base` (your BFF), with **no cookies
-or credentials** — the BFF is the auth boundary.
+The browser makes requests **only** to `api-base` (your BFF) — never to BaoBox.
+They use `credentials: "same-origin"`, so your tenant session reaches a
+same-origin BFF (for `authz`) but nothing is sent cross-origin or to BaoBox. The
+BFF is the auth boundary; the browser holds no BaoBox credentials.
 
 ---
 
@@ -200,7 +204,64 @@ The BFF passes your `tenantId` to BaoBox on every call — `@baobox/sdk`'s
 - **get/update** on a skill owned by another tenant returns **404** (not 403), so
   a caller can't even probe for its existence.
 
-Your `authz` hook is the second gate, in front of every BaoBox call.
+Your `authz` hook is the second gate, in front of every BaoBox call — and the
+BFF is **fail-closed**: with no `authz` hook, every request is denied (see
+Step 1).
+
+---
+
+## Security & supply chain
+
+The Web Component is **runtime-loaded into your admin origin** and runs with the
+admin's session, so treat the bundle as code you ship. Required controls:
+
+- **Pin the exact bundle version** — never float `@latest`. Pin
+  `@baobox/skill-builder@0.1.0` (and ideally **self-host** the bundle from your
+  own static origin rather than depending on a public CDN at runtime, or vendor
+  it as a build-time dependency you bundle yourself).
+- **Subresource Integrity (SRI)** when loading from a URL — add an `integrity`
+  hash so a tampered/replaced bundle won't execute:
+  ```html
+  <script type="module"
+          src="https://your-cdn/baobox-skill-builder-0.1.0.js"
+          integrity="sha384-…"
+          crossorigin="anonymous"></script>
+  ```
+  Generate the hash from the published artifact:
+  `openssl dgst -sha384 -binary baobox-skill-builder.js | openssl base64 -A`.
+- **Content-Security-Policy** on the admin page — restrict where the bundle may
+  load from and where it may talk to. The element only needs to reach your BFF
+  origin:
+  ```
+  Content-Security-Policy: script-src 'self' https://your-cdn;
+                           connect-src 'self' https://your-bff-origin;
+  ```
+- **Provenance** — the packages are published with npm `--provenance` from the
+  public `baobox-ai/baobox-skill-studio` repo (verifiable build attestation).
+  Prefer installing the npm package over copy-pasting bundle contents.
+- **Never put the `adminSecret`, BaoBox endpoint, or another tenant's id in
+  client code** — those live only in the BFF (server-side). The browser holds
+  **no BaoBox credentials**; the element never calls BaoBox.
+
+### How the BFF authenticates the user
+
+The element fetches the BFF with `credentials: "same-origin"`: your **own**
+tenant session (cookie/header) reaches your BFF when it's mounted on the **same
+origin** as the host page (the recommended setup), so your `authz` hook can
+identify the user — but **nothing** is sent cross-origin, and **never** to
+BaoBox. If you mount the BFF on a **different origin**, same-origin cookies won't
+be sent: authenticate those requests another way (e.g. a token your host adds)
+and keep `authz` fail-closed.
+
+### Multi-tenant / production gate (#254)
+
+Phase-1 scoping uses the **cross-tenant `adminSecret`** plus the
+`X-BaoBox-Tenant-Id` header the SDK sends — acceptable for a **single-tenant
+staging** walking skeleton. **Before a second tenant or production**, the BFF
+must authenticate with a **per-tenant credential** (so the key itself enforces
+the boundary, with the header as belt-and-suspenders), and the fail-closed authz
+above must be in force. These items are tracked as a pre-prod gate in
+[baobox#254](https://github.com/baobox-ai/baobox/issues/254).
 
 ---
 
@@ -232,9 +293,12 @@ skeleton):
   it in client config.
 - **404 on a skill you expect** — it may belong to a different tenant, or your
   `tenantId` is wrong. Cross-tenant access is intentionally a 404.
-- **CORS** — serve the BFF on the **same origin** as the host page (recommended),
-  or configure CORS on your backend; the element sends no credentials, so simple
-  CORS suffices.
+- **CORS / auth** — serve the BFF on the **same origin** as the host page
+  (recommended): the element's `same-origin` requests carry your tenant session
+  for `authz`, no CORS needed. If you must mount it cross-origin, configure CORS
+  **and** a non-cookie auth path (same-origin cookies aren't sent cross-origin).
+- **Everything is denied (403)** — the BFF is fail-closed: you haven't wired an
+  `authz` hook (or your hook can't see the session — check it's same-origin).
 
 ## Phase 2 (not yet)
 
