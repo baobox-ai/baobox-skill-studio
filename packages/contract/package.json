@@ -1,0 +1,62 @@
+{
+  "name": "@baobox/skill-builder-contract",
+  "version": "0.1.0",
+  "description": "Shared BFF↔MFE HTTP contract (types + Zod) for the BaoBox Skill Studio. Reuses @baobox/sdk skill types.",
+  "license": "MIT",
+  "author": "Bright Qi <bright@adoptive.co>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baobox-ai/baobox-skill-studio.git",
+    "directory": "packages/contract"
+  },
+  "homepage": "https://github.com/baobox-ai/baobox-skill-studio/tree/main/packages/contract#readme",
+  "bugs": {
+    "url": "https://github.com/baobox-ai/baobox-skill-studio/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
+  },
+  "dependencies": {
+    "@baobox/sdk": "^0.13.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.4"
+  },
+  "keywords": [
+    "baobox",
+    "skill-studio",
+    "contract",
+    "bff",
+    "zod"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
