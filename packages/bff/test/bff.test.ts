@@ -47,12 +47,16 @@ function makeStub(impl: {
   return { client, calls };
 }
 
+// These suites exercise plumbing/validation/audit, not authz, so they opt into
+// `allowUnauthenticated` — the fail-closed default (#254) is covered separately
+// in the "fail-closed defaults" suite below.
 function makeBff(stub: ReturnType<typeof makeStub>, hooks?: Parameters<typeof createSkillBuilderBff>[0]["hooks"]) {
   return createSkillBuilderBff({
     endpoint: "https://baobox.example.com",
     adminSecret: ADMIN_SECRET,
     tenantId: TENANT,
     client: stub.client,
+    allowUnauthenticated: true,
     ...(hooks ? { hooks } : {}),
   });
 }
@@ -298,5 +302,58 @@ describe("createSkillBuilderBff — sourceOfTruth hook", () => {
     const res = await app.request("/skills");
     const body = (await res.json()) as { data: Array<{ name: string }> };
     expect(body.data[0]?.name).toBe("★ Skill sk_1");
+  });
+});
+
+describe("createSkillBuilderBff — fail-closed defaults (#254)", () => {
+  function bareBff(stub: ReturnType<typeof makeStub>, extra: Record<string, unknown> = {}) {
+    return createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      adminSecret: ADMIN_SECRET,
+      tenantId: TENANT,
+      client: stub.client,
+      ...extra,
+    });
+  }
+
+  it("denies (403) and never calls the SDK when no authz hook is configured", async () => {
+    const stub = makeStub({ list: async () => [skill("sk_1")] });
+    const app = bareBff(stub); // no authz, no allowUnauthenticated → fail closed
+
+    const res = await app.request("/skills");
+    expect(res.status).toBe(403);
+    expect(stub.calls.list).not.toHaveBeenCalled();
+  });
+
+  it("fail-closed applies to get and update too", async () => {
+    const stub = makeStub({});
+    const app = bareBff(stub);
+
+    expect((await app.request("/skills/sk_1")).status).toBe(403);
+    const patch = await app.request("/skills/sk_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ description: "x" }),
+    });
+    expect(patch.status).toBe(403);
+    expect(stub.calls.get).not.toHaveBeenCalled();
+    expect(stub.calls.update).not.toHaveBeenCalled();
+  });
+
+  it("allowUnauthenticated:true opts out (explicit, deliberate)", async () => {
+    const stub = makeStub({ list: async () => [skill("sk_1")] });
+    const app = bareBff(stub, { allowUnauthenticated: true });
+
+    const res = await app.request("/skills");
+    expect(res.status).toBe(200);
+    expect(stub.calls.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("a provided authz hook still governs (allowUnauthenticated irrelevant)", async () => {
+    const stub = makeStub({ list: async () => [skill("sk_1")] });
+    const app = bareBff(stub, { hooks: { authz: () => false } });
+
+    expect((await app.request("/skills")).status).toBe(403);
+    expect(stub.calls.list).not.toHaveBeenCalled();
   });
 });

@@ -67,6 +67,14 @@ export interface SkillStudioBffConfig {
   adminSecret: string;
   tenantId: string;
   hooks?: SkillStudioHooks;
+  /**
+   * Fail-closed default (#254). With no `hooks.authz`, every request is DENIED
+   * (403) unless this is explicitly `true`. Set it ONLY when another layer
+   * already authenticates/authorizes requests reaching this router (e.g. an
+   * upstream auth middleware or a trusted internal network). Default: `false` —
+   * a forgotten `authz` hook must never silently expose skill read/write.
+   */
+  allowUnauthenticated?: boolean;
   /** Inject a pre-built / stubbed client (tests, custom transports). */
   client?: BaoBoxClient;
   /** `fetch` override forwarded to the SDK client (edge runtimes, tests). */

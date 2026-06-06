@@ -72,6 +72,7 @@ createSkillBuilderBff({
       detail?: (detail, { tenantId, skillId }) => SkillDetail | Promise<…>,
     },
   },
+  allowUnauthenticated?: boolean,  // default false — see "fail-closed" below
   client?: BaoBoxClient,   // inject a pre-built/stubbed client (tests)
   fetch?: typeof fetch,    // forwarded to the SDK client
 })
@@ -81,12 +82,23 @@ Per request: **authz → SDK call → audit → contract-shaped response.**
 
 ## Security
 
+- **Fail-closed authz (default).** With **no `hooks.authz`**, every request is
+  **denied (403)** and the BFF logs a warning at mount. To run without an authz
+  hook you must explicitly set **`allowUnauthenticated: true`** — and only when
+  another layer already authorizes callers (upstream middleware / trusted
+  internal network). A forgotten hook can never silently expose skill read/write.
 - `adminSecret` is held server-side and **never appears in any response or
   error** — error messages are mapped from the SDK's status/code and the secret
   value is additionally redacted as a backstop.
 - Every call is **tenant-scoped** (`#247`): a skill owned by another tenant
   returns **404**, never another tenant's data.
 - `authz` denial short-circuits **before** any BaoBox call and returns **403**.
+
+> ⚠️ Multi-tenant note (#254): Phase-1 scoping uses the cross-tenant
+> `adminSecret` + the `X-BaoBox-Tenant-Id` header the SDK sends. That is fine for
+> a single-tenant staging walking skeleton, but **before a second tenant or
+> production** the BFF must authenticate with a **per-tenant credential** so the
+> key itself enforces the boundary. Tracked in baobox#254.
 
 ## Versioning
 
