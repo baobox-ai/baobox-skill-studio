@@ -1,0 +1,22 @@
+name: CI
+
+# Verify every workspace on push to main and on PRs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

@@ -1,0 +1,25 @@
+{
+  "name": "baobox-skill-studio",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Embeddable Skill Studio — MFE + BFF packages (contract, bff, web component) on top of @baobox/sdk.",
+  "license": "MIT",
+  "author": "Bright Qi <bright@adoptive.co>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/baobox-ai/baobox-skill-studio.git"
+  },
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
