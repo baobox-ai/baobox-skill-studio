@@ -15,7 +15,11 @@ export {
   createApi,
   SkillStudioApiError,
   type SkillStudioApi,
+  type SkillCreateRequest,
   type SkillDetail,
+  type SkillParameter,
+  type SkillStructuralUpdateRequest,
   type SkillSummary,
+  type SkillToolSummary,
   type SkillUpdateRequest,
 } from "./api.js";
