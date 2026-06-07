@@ -203,7 +203,7 @@ describe("<SkillStudio> — orchestrator panels", () => {
     expect(await screen.findByText(/isn't on your allowlist/)).toBeTruthy();
   });
 
-  it("loads parameters (secret masked) and saves the set", async () => {
+  it("loads parameters (secret masked) and saves the EXACT set — an untouched secret keeps (blank, no local fields)", async () => {
     const api = mockApi({
       getParameters: vi.fn(async () => [
         { key: "account_id", value: "acct_1" },
@@ -213,12 +213,45 @@ describe("<SkillStudio> — orchestrator panels", () => {
     render(<SkillStudio apiBase="/bff" api={api} />);
     fireEvent.click(await screen.findByText("Invoice Chaser"));
 
-    // first param value input carries the non-secret value
     const valueInputs = (await screen.findAllByLabelText("Parameter value")) as HTMLInputElement[];
     expect(valueInputs[0]?.value).toBe("acct_1");
     expect(valueInputs[1]?.value).toBe(""); // secret arrived masked
     fireEvent.click(screen.getByRole("button", { name: "Save parameters" }));
-    await waitFor(() => expect(api.setParameters).toHaveBeenCalledWith("sk_1", expect.any(Array)));
+    // Untouched secret goes up as {secret:true, value:""} (the "keep" signal); no
+    // _id / _loadedSecret leaks into the contract payload.
+    await waitFor(() =>
+      expect(api.setParameters).toHaveBeenCalledWith("sk_1", [
+        { key: "account_id", value: "acct_1" },
+        { key: "api_token", value: "", secret: true },
+      ]),
+    );
+  });
+
+  it("typing a new secret value replaces it (sent verbatim, not kept)", async () => {
+    const api = mockApi({
+      getParameters: vi.fn(async () => [{ key: "api_token", value: "", secret: true }]),
+    });
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+    const valueInput = (await screen.findByLabelText("Parameter value")) as HTMLInputElement;
+    fireEvent.input(valueInput, { target: { value: "new-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save parameters" }));
+    await waitFor(() =>
+      expect(api.setParameters).toHaveBeenCalledWith("sk_1", [{ key: "api_token", value: "new-secret", secret: true }]),
+    );
+  });
+
+  it("blocks save and shows an error when temperature is out of range", async () => {
+    const api = mockApi();
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+    const temp = (await screen.findByLabelText("Temperature")) as HTMLInputElement;
+    fireEvent.input(temp, { target: { value: "5" } });
+    expect(await screen.findByText(/Temperature must be a number between 0 and 2/)).toBeTruthy();
+    const saveBtn = screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(true);
+    fireEvent.click(saveBtn);
+    expect(api.updateSkillStructural).not.toHaveBeenCalled();
   });
 });
 

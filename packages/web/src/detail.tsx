@@ -208,23 +208,39 @@ function EditableSkill({
     setSaved(false);
   }
 
-  // Diff the draft against the loaded detail; only changed fields are sent.
+  // Validate the numeric fields against the contract's bounds before they can be
+  // marked dirty / submitted (temperature 0–2; maxTokens a positive integer).
+  const tempNum = Number(draft.temperature);
+  const tempInvalid =
+    draft.temperature.trim() !== "" && (!Number.isFinite(tempNum) || tempNum < 0 || tempNum > 2);
+  const maxNum = Number(draft.maxTokens);
+  const maxInvalid = draft.maxTokens.trim() !== "" && (!Number.isInteger(maxNum) || maxNum < 1);
+  const numericError = tempInvalid
+    ? "Temperature must be a number between 0 and 2."
+    : maxInvalid
+      ? "Max tokens must be a positive integer."
+      : null;
+
+  // Diff the draft against the loaded detail; only changed (and VALID) fields are sent.
   function changedFields(): SkillStructuralUpdateRequest {
     const out: SkillStructuralUpdateRequest = {};
     if (draft.name !== detail.name) out.name = draft.name;
     if (draft.description !== detail.description) out.description = draft.description;
     if (draft.systemPrompt !== detail.systemPrompt) out.systemPrompt = draft.systemPrompt;
     if (draft.model !== detail.model) out.model = draft.model;
-    const t = Number(draft.temperature);
-    if (draft.temperature.trim() !== "" && t !== detail.temperature) out.temperature = t;
-    const m = Number(draft.maxTokens);
-    if (draft.maxTokens.trim() !== "" && m !== detail.maxTokens) out.maxTokens = m;
+    if (!tempInvalid && draft.temperature.trim() !== "" && tempNum !== detail.temperature) {
+      out.temperature = tempNum;
+    }
+    if (!maxInvalid && draft.maxTokens.trim() !== "" && maxNum !== detail.maxTokens) {
+      out.maxTokens = maxNum;
+    }
     return out;
   }
 
-  const dirty = Object.keys(changedFields()).length > 0;
+  const dirty = !numericError && Object.keys(changedFields()).length > 0;
 
   async function save() {
+    if (numericError) return;
     const changes = changedFields();
     if (Object.keys(changes).length === 0) return;
     setSaving(true);
@@ -335,6 +351,12 @@ function EditableSkill({
           />
         </div>
       </div>
+
+      {numericError && (
+        <div role="alert" style={{ color: p.danger, fontSize: "0.8rem", marginTop: "0.4rem" }}>
+          {numericError}
+        </div>
+      )}
 
       <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.6rem" }}>
         <button type="button" disabled={!dirty || saving} onClick={() => void save()} style={primaryBtn(p, !dirty || saving)}>
@@ -576,7 +598,14 @@ function ToolsPanel({ api, palette: p, skillId }: { api: SkillStudioApi; palette
 // PUT replaces the whole set. Secret values arrive masked (blank); they are
 // write-only here — re-enter a secret to change it.
 // ---------------------------------------------------------------------------
-type ParamRow = SkillParameter & { _id: number };
+// `_loadedSecret` marks a secret that arrived already-set from the server (its
+// value is masked/blank — the browser is never allowed to read it). Per the
+// contract, a `secret: true` row carried with an **empty value** is the
+// documented **"keep the current value"** signal: the BFF's parameter store
+// retains the stored secret rather than overwriting it with the blank. Typing a
+// new value replaces the secret; removing the row deletes it. (`_loadedSecret`
+// is a local-only flag — stripped from the PUT payload.)
+type ParamRow = SkillParameter & { _id: number; _loadedSecret?: boolean };
 
 function ParametersPanel({ api, palette: p, skillId }: { api: SkillStudioApi; palette: Palette; skillId: string }) {
   const [rows, setRows] = useState<ParamRow[] | null>(null);
@@ -590,9 +619,10 @@ function ParametersPanel({ api, palette: p, skillId }: { api: SkillStudioApi; pa
     return idRef.current;
   };
 
-  // Re-seed rows from a server list, assigning stable local ids.
+  // Re-seed rows from a server list, assigning stable local ids. A secret comes
+  // back with its value masked (blank); flag it so a blank-on-save means "keep".
   function seedRows(params: SkillParameter[]) {
-    setRows(params.map((param, i) => ({ ...param, _id: i })));
+    setRows(params.map((param, i) => ({ ...param, _id: i, _loadedSecret: !!param.secret })));
     idRef.current = params.length;
   }
 
@@ -610,7 +640,7 @@ function ParametersPanel({ api, palette: p, skillId }: { api: SkillStudioApi; pa
     void reload();
   }, [api, skillId]);
 
-  function update(id: number, patch: Partial<SkillParameter>) {
+  function update(id: number, patch: Partial<ParamRow>) {
     setRows((rs) => (rs ? rs.map((r) => (r._id === id ? { ...r, ...patch } : r)) : rs));
     setSaved(false);
   }
@@ -629,7 +659,9 @@ function ParametersPanel({ api, palette: p, skillId }: { api: SkillStudioApi; pa
     setError(null);
     setSaved(false);
     try {
-      const payload: SkillParameter[] = rows.map(({ _id, ...param }) => param);
+      // Strip local-only fields; a kept secret (loaded, untouched) goes up as
+      // `{ secret: true, value: "" }` — the contract's "keep current" signal.
+      const payload: SkillParameter[] = rows.map(({ _id, _loadedSecret, ...param }) => param);
       seedRows(await api.setParameters(skillId, payload));
       setSaved(true);
     } catch (err) {
@@ -643,7 +675,8 @@ function ParametersPanel({ api, palette: p, skillId }: { api: SkillStudioApi; pa
     <section>
       <h3 style={sectionTitle()}>Parameters</h3>
       <p style={{ color: p.muted, fontSize: "0.8rem", margin: "0 0 0.5rem" }}>
-        Per-tenant values injected without editing the prompt. Secret values are hidden — re-enter one to change it.
+        Per-tenant values injected without editing the prompt. A secret is hidden — leave it blank to
+        keep the stored value, type a new one to replace it, or remove the row to delete it.
       </p>
       {error && (
         <div role="alert" style={{ color: p.danger, marginBottom: "0.5rem", fontSize: "0.85rem" }}>
@@ -665,10 +698,17 @@ function ParametersPanel({ api, palette: p, skillId }: { api: SkillStudioApi; pa
               />
               <input
                 aria-label="Parameter value"
-                placeholder={r.secret ? "•••• (hidden)" : "value"}
+                placeholder={r._loadedSecret ? "•••• unchanged — type to replace" : r.secret ? "secret value" : "value"}
                 type={r.secret ? "password" : "text"}
                 value={r.value}
-                onInput={(e) => update(r._id, { value: (e.currentTarget as HTMLInputElement).value })}
+                // Typing into a kept secret turns it into a real replacement: clear the
+                // "loaded secret" flag so the new value is sent (not treated as "keep").
+                onInput={(e) =>
+                  update(r._id, {
+                    value: (e.currentTarget as HTMLInputElement).value,
+                    ...(r._loadedSecret ? { _loadedSecret: false } : {}),
+                  })
+                }
                 style={{ ...inputStyle(p), flex: 2 }}
               />
               <label style={{ fontSize: "0.8rem", color: p.muted, display: "flex", alignItems: "center", gap: "0.2rem" }}>

@@ -22,7 +22,11 @@ Full orchestrator authoring UI (#260) + BaoBox#264 Defect B.
   (`tool_not_allowed`, 403) and surfaced as an allowlist message.
 - **Per-tenant parameters** — key / value (+ optional label, secret) editor
   (`GET`/`PUT /skills/:id/parameters`). Secret values arrive masked and are
-  write-only in the UI.
+  write-only. To avoid wiping a secret the browser can't read, a `secret: true`
+  row sent with an **empty value** is the documented **"keep current value"**
+  signal (the BFF's parameter store retains it); typing replaces it, removing the
+  row deletes it. Numeric fields (temperature 0–2, positive-integer max-tokens)
+  are validated client-side before save.
 - **`isSystem` / `cloneable` (BaoBox#264 Defect B)** — a system skill renders
   **read-only** (no editable form); when `cloneable`, a **"Copy as my own"**
   action creates a tenant-owned copy and opens it. These fields ride through on

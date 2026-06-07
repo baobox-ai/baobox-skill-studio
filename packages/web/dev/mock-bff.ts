@@ -177,7 +177,13 @@ export function createMockFetch(opts: MockFetchOptions = {}): typeof globalThis.
         return json(200, { data: stored.map((p) => (p.secret ? { ...p, value: "" } : p)) });
       }
       if (method === "PUT") {
-        const next = (body.parameters as SkillParameter[]) ?? [];
+        const incoming = (body.parameters as SkillParameter[]) ?? [];
+        const prev = new Map((params.get(id) ?? []).map((p) => [p.key, p]));
+        // Honor the "keep" signal: a secret with a blank value retains the
+        // stored secret rather than overwriting it (the host owns the cleartext).
+        const next = incoming.map((p) =>
+          p.secret && p.value === "" && prev.get(p.key)?.secret ? { ...p, value: prev.get(p.key)?.value ?? "" } : p,
+        );
         params.set(id, next);
         return json(200, { data: next.map((p) => (p.secret ? { ...p, value: "" } : p)) });
       }
