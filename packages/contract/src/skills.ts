@@ -145,3 +145,180 @@ export const skillDetailResponseSchema = z.object({
   data: skillDetailSchema,
 });
 export type SkillDetailResponse = z.infer<typeof skillDetailResponseSchema>;
+
+// ===========================================================================
+// Phase 2 (#258) — the full orchestrator AUTHORING surface. Everything below is
+// ADDITIVE: the Phase-1 shapes above are unchanged, so existing BFF (#248) and
+// Web Component (#249) builds keep working. The new endpoints are implemented by
+// the BFF (#259) over `@baobox/sdk` (#257) and consumed by the Web Component
+// (#260).
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Create — a tenant authors a NEW skill (always tenant-owned server-side; the
+// BFF's per-tenant credential enforces ownership, so the contract carries no
+// `tenantId`). `.strict()` rejects unknown keys (no smuggling `tenantId`/`id`).
+// Tools are NOT set here — attach them separately via the tool endpoints, which
+// are gated by the tenant tool allowlist server-side.
+// ---------------------------------------------------------------------------
+export const skillCreateRequestSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    systemPrompt: z.string().min(1),
+    model: z.string().min(1).optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().optional(),
+    sourceUrl: z.string().url().optional(),
+  })
+  .strict();
+export type SkillCreateRequest = z.infer<typeof skillCreateRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Structural (multi-field) update — Phase 2's PUT /skills/:id. Unlike the
+// Phase-1 single-field PATCH, this accepts any subset of editable fields in one
+// call (the authoring UI saves a whole form), requiring AT LEAST one. `.strict()`
+// still rejects `id` / `tenantId`. The Phase-1 `skillUpdateRequestSchema` (PATCH)
+// is left untouched for backward compatibility.
+// ---------------------------------------------------------------------------
+export const skillStructuralUpdateRequestSchema = z
+  .object({
+    name: z.string().min(1).optional(),
+    description: z.string().optional(),
+    systemPrompt: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    maxTokens: z.number().int().positive().optional(),
+  })
+  .strict()
+  .refine((body) => Object.keys(body).length >= 1, {
+    message: "at least one editable field must be provided",
+  });
+export type SkillStructuralUpdateRequest = z.infer<typeof skillStructuralUpdateRequestSchema>;
+
+// Compile-time drift guards — create/structural-update editable fields track
+// `@baobox/sdk`'s `Skill` (same posture as `_updateTracksSkill` above).
+type CreatableSkillFields = Pick<Skill, "name" | "systemPrompt"> &
+  Partial<Pick<Skill, "description" | "model" | "temperature" | "maxTokens" | "sourceUrl">>;
+const _createTracksSkill = (c: SkillCreateRequest): CreatableSkillFields => c;
+const _structuralTracksSkill = (
+  u: SkillStructuralUpdateRequest,
+): Partial<
+  Pick<Skill, "name" | "description" | "systemPrompt" | "model" | "temperature" | "maxTokens">
+> => u;
+void _createTracksSkill;
+void _structuralTracksSkill;
+
+// ---------------------------------------------------------------------------
+// Sub-skill graph (orchestrator) — attach/detach a child skill. The path
+// carries the parent id; the body carries the child id on attach. Detach takes
+// the child id in the path. A cycle is reported via the contract error shape
+// below (code `cycle_detected`).
+// ---------------------------------------------------------------------------
+export const attachSubSkillRequestSchema = z
+  .object({
+    childSkillId: z.string().min(1),
+  })
+  .strict();
+export type AttachSubSkillRequest = z.infer<typeof attachSubSkillRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Tool wiring — attach/detach a tool. The body carries the tool id on attach.
+// The server confines attach to the tenant's tool allowlist; an off-list tool
+// is reported via the contract error shape (code `tool_not_allowed`).
+// ---------------------------------------------------------------------------
+export const attachToolRequestSchema = z
+  .object({
+    toolId: z.string().min(1),
+  })
+  .strict();
+export type AttachToolRequest = z.infer<typeof attachToolRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Per-tenant parameters — a tenant parameterises a skill (e.g. an account id, a
+// brand name, a per-tenant secret reference) without editing the prompt. A
+// parameter is a `key` + a string `value`; `secret: true` marks a value the UI
+// must mask and the BFF must never echo back in cleartext. `label` is an
+// optional human caption for the authoring UI.
+// ---------------------------------------------------------------------------
+export const skillParameterSchema = z
+  .object({
+    key: z
+      .string()
+      .min(1)
+      .regex(/^[A-Za-z0-9_]+$/, "key must be alphanumeric/underscore"),
+    value: z.string(),
+    label: z.string().optional(),
+    secret: z.boolean().optional(),
+  })
+  .strict();
+export type SkillParameter = z.infer<typeof skillParameterSchema>;
+
+export const setSkillParametersRequestSchema = z
+  .object({
+    parameters: z.array(skillParameterSchema),
+  })
+  .strict();
+export type SetSkillParametersRequest = z.infer<typeof setSkillParametersRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// Contract error shape — every non-2xx the BFF returns on this surface uses
+// this envelope, so the Web Component can branch on a STABLE `code` (render a
+// "would create a cycle" message, a field-validation message, an
+// "tool not permitted" message, …) rather than parsing prose. Mirrors the
+// BaoBox `{ error: { code, message, requestId? } }` convention.
+// ---------------------------------------------------------------------------
+export const contractErrorCodeSchema = z.enum([
+  "validation_error", // request body failed schema validation (400)
+  "cycle_detected", // sub-skill attach would create a cycle (422)
+  "tool_not_allowed", // tool is not on the tenant's allowlist (403)
+  "forbidden", // authz hook denied / not the tenant's resource (403)
+  "not_found", // skill/child/tool not visible to this tenant (404)
+  "conflict", // duplicate / state conflict (409)
+  "upstream_error", // BaoBox returned an unexpected error (502)
+  "internal_error", // unhandled BFF error (500)
+]);
+export type ContractErrorCode = z.infer<typeof contractErrorCodeSchema>;
+
+export const contractErrorSchema = z.object({
+  error: z.object({
+    code: contractErrorCodeSchema,
+    message: z.string(),
+    requestId: z.string().optional(),
+  }),
+});
+export type ContractError = z.infer<typeof contractErrorSchema>;
+
+// ---------------------------------------------------------------------------
+// Phase-2 response envelopes. Create / structural-update return the full detail
+// (reuse `skillDetailResponseSchema`). Graph + tool mutations return a small ack;
+// the graph/tool reads return lists.
+// ---------------------------------------------------------------------------
+export const attachAckResponseSchema = z.object({
+  data: z.object({ attached: z.boolean() }),
+});
+export type AttachAckResponse = z.infer<typeof attachAckResponseSchema>;
+
+export const detachAckResponseSchema = z.object({
+  data: z.object({ detached: z.boolean() }),
+});
+export type DetachAckResponse = z.infer<typeof detachAckResponseSchema>;
+
+// A tool as projected onto this surface — lean, never carries handlerConfig
+// (which may hold callback secrets) to the browser.
+export const skillToolSummarySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+});
+export type SkillToolSummary = z.infer<typeof skillToolSummarySchema>;
+
+export const listAttachedSkillsResponseSchema = z.object({
+  data: z.array(skillSummarySchema),
+});
+export type ListAttachedSkillsResponse = z.infer<typeof listAttachedSkillsResponseSchema>;
+
+export const listSkillToolsResponseSchema = z.object({
+  data: z.array(skillToolSummarySchema),
+});
+export type ListSkillToolsResponse = z.infer<typeof listSkillToolsResponseSchema>;
