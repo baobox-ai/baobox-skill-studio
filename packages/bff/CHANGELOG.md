@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.3.0
+
+Phase-2 authoring surface + git-truth mutation hook (#259).
+
+### Added
+
+- **Authoring endpoints** implementing the `@baobox/skill-builder-contract`
+  Phase-2 surface over the `@baobox/sdk` apiKey path, all tenant-scoped:
+  - `POST /skills` — create a tenant-owned skill (returns the full detail, 201).
+  - `PUT /skills/:id` — structural multi-field update.
+  - `GET|POST /skills/:id/attached-skills` + `DELETE …/:childId` — orchestrator
+    sub-skill graph (a worker `422` surfaces as the contract `cycle_detected`).
+  - `GET|POST /skills/:id/tools` + `DELETE …/:toolId` — tool wiring (a worker
+    `403` on attach surfaces as `tool_not_allowed`). The tool **list is projected
+    to `{ id, name, description }`** — `handlerConfig` / `inputSchema` (which may
+    carry callback secrets) are NEVER shipped to the browser.
+  - `GET|PUT /skills/:id/parameters` — per-tenant parameters (see below).
+- **`hooks.onMutation({ op, skillId, before?, after?, childSkillId?, toolId? })`**
+  — the git-truth control point. Fires AFTER a structural mutation commits so the
+  host can record drift / queue a promote-back. It is a notification, not a gate
+  (the gate is `authz`, before the write); a throwing `onMutation` never fails the
+  request (the failure is audited). Default: no-op. `before`/`after` carry the
+  skill image for `create`/`update`/`updateStructural`; graph/tool/parameter ops
+  carry the `op` + target id.
+- **`hooks.parameters` parameter store** — per-tenant parameters have no BaoBox
+  backing, so persistence is delegated to the host. Omit it and `GET …/parameters`
+  returns `[]` while `PUT …/parameters` is refused (403). A parameter marked
+  `secret: true` has its value **masked (blanked) in every response** — a secret
+  value is never echoed to the browser.
+- Extended the `authz` op union and `AuditRecord` to the new ops, including the
+  `childSkillId` / `toolId` targets.
+
+### Changed
+
+- Upstream errors are now normalized to the contract's stable
+  `ContractErrorCode` enum (the Web Component branches on `code`), with
+  op-aware disambiguation for `cycle_detected` (attach 422) and
+  `tool_not_allowed` (tool-attach 403). The Phase-1 validation code is now
+  `validation_error` (was `invalid_request`); statuses are unchanged.
+- Bumped `@baobox/sdk` to `^0.16.0` (the #257 authoring ops) and
+  `@baobox/skill-builder-contract` to `^0.2.0`.
+
+### Unchanged (by design)
+
+- Credential redaction, fail-closed `authz` default, and the exactly-one-of
+  `apiKey`/`adminSecret` construction rule — all preserved. The Phase-1
+  list/get/PATCH behaviour and the read-side `sourceOfTruth` decorators are
+  byte-for-byte compatible.
+
 ## 0.2.0
 
 Per-tenant credential (#254 AC1).

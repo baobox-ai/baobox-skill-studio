@@ -1,19 +1,40 @@
 import { BaoBoxClient, BaoBoxError } from "@baobox/sdk";
 import {
+  type ContractErrorCode,
+  contractErrorCodeSchema,
   type SkillDetail,
+  type SkillParameter,
   type SkillSummary,
+  type SkillToolSummary,
+  attachSubSkillRequestSchema,
+  attachToolRequestSchema,
+  setSkillParametersRequestSchema,
+  skillCreateRequestSchema,
+  skillStructuralUpdateRequestSchema,
   skillUpdateRequestSchema,
   toSkillSummary,
 } from "@baobox/skill-builder-contract";
 import { type Context, Hono } from "hono";
-import type { AuditRecord, SkillStudioBffConfig, SkillStudioHooks, SkillStudioOp } from "./types.js";
+import type {
+  AuditRecord,
+  ParameterStore,
+  SkillMutationEvent,
+  SkillStudioBffConfig,
+  SkillStudioHooks,
+  SkillStudioMutationOp,
+  SkillStudioOp,
+} from "./types.js";
 
 export type {
   AuditRecord,
   AuthzContext,
+  ParameterStore,
+  SkillMutationEvent,
   SkillStudioBffConfig,
   SkillStudioHooks,
+  SkillStudioMutationOp,
   SkillStudioOp,
+  SkillStudioReadOp,
   SourceOfTruthHooks,
 } from "./types.js";
 
@@ -28,17 +49,58 @@ class AuthzDenied extends Error {
 
 interface ContractError {
   status: number;
-  code: string;
+  code: ContractErrorCode;
   message: string;
   requestId?: string;
 }
 
+const CONTRACT_CODES = new Set(contractErrorCodeSchema.options as readonly string[]);
+
+// Normalize an upstream BaoBox error code/status to the STABLE contract code the
+// Web Component branches on (#258). The worker's own codes (`skill_not_found`,
+// `tool_not_found`, …) are NOT contract codes, so they're mapped by status. A
+// few cases are disambiguated by the current `op`: a 403 on `attachTool` is the
+// per-key tool allowlist rejection (`tool_not_allowed`), and a 422 on
+// `attachSkill` is the sub-skill cycle guard (`cycle_detected`). When the worker
+// already speaks a contract code (e.g. it returns `cycle_detected` directly),
+// that's honored verbatim.
+function normalizeContractCode(
+  rawCode: string | undefined,
+  status: number,
+  op?: SkillStudioOp,
+): ContractErrorCode {
+  // op-specific disambiguation takes PRECEDENCE: the worker returns a generic
+  // code on these paths (a plain `forbidden` for the tool-allowlist 403), so the
+  // contract's specific code can only be recovered from the op + status. The only
+  // BaoBox 403 on the tool-attach path is the allowlist/ownership rejection, and
+  // the only 422 on the sub-skill attach path is the cycle guard.
+  if (op === "attachTool" && status === 403) return "tool_not_allowed";
+  if (op === "attachSkill" && status === 422) return "cycle_detected";
+  // Otherwise honor a worker code that already speaks the contract verbatim…
+  if (rawCode && CONTRACT_CODES.has(rawCode)) return rawCode as ContractErrorCode;
+  // …else fall back to a status-derived contract code.
+  switch (status) {
+    case 400:
+      return "validation_error";
+    case 403:
+      return "forbidden";
+    case 404:
+      return "not_found";
+    case 409:
+      return "conflict";
+    case 422:
+      return "validation_error";
+    default:
+      return "upstream_error";
+  }
+}
+
 // Map any thrown value to a contract-shaped error. CRITICAL: this must never
-// surface the `adminSecret` or arbitrary upstream payloads. The secret only
-// ever lives in the SDK client's Authorization header and is never part of a
+// surface the credential or arbitrary upstream payloads. The secret only ever
+// lives in the SDK client's Authorization header and is never part of a
 // BaoBoxError, so mapping status/code/message is safe; the raw `body` is
 // deliberately dropped.
-function toContractError(err: unknown): ContractError {
+function toContractError(err: unknown, op?: SkillStudioOp): ContractError {
   if (err instanceof AuthzDenied) {
     return { status: 403, code: "forbidden", message: err.message };
   }
@@ -46,7 +108,7 @@ function toContractError(err: unknown): ContractError {
     const status = err.status >= 400 && err.status < 600 ? err.status : 502;
     return {
       status,
-      code: err.code || "upstream_error",
+      code: normalizeContractCode(err.code, status, op),
       message: err.message,
       ...(err.requestId ? { requestId: err.requestId } : {}),
     };
@@ -54,9 +116,18 @@ function toContractError(err: unknown): ContractError {
   return { status: 500, code: "internal_error", message: "Internal error" };
 }
 
+// Per-tenant parameters: a value marked `secret` must NEVER leave the server in
+// cleartext (#258 / #259). The host's store owns the real value; the BFF blanks
+// it in every response so the browser only ever sees that a secret is set.
+function maskSecretParameters(parameters: SkillParameter[]): SkillParameter[] {
+  return parameters.map((p) => (p.secret ? { ...p, value: "" } : p));
+}
+
 /**
- * Build a mountable Hono router that serves the `@baobox/skill-builder-contract`
- * Phase-1 surface (`GET /skills`, `GET /skills/:id`, `PATCH /skills/:id`) by
+ * Build a mountable Hono router that serves the full `@baobox/skill-builder-contract`
+ * surface — the Phase-1 reads/edit (`GET /skills`, `GET /skills/:id`,
+ * `PATCH /skills/:id`) plus the Phase-2 authoring ops (create, structural update,
+ * sub-skill attach/detach, tool attach/detach, per-tenant parameters) — by
  * calling `@baobox/sdk` scoped to a single tenant.
  *
  * Mount it under any base path on the tenant's backend, e.g.
@@ -66,6 +137,7 @@ function toContractError(err: unknown): ContractError {
 export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
   const { tenantId } = config;
   const hooks: SkillStudioHooks = config.hooks ?? {};
+  const parameterStore: ParameterStore | undefined = hooks.parameters;
   // #254 — fail closed. Without an authz hook the BFF denies everything unless
   // the host explicitly opts out. Warn loudly at mount so a forgotten hook is
   // obvious in logs rather than silently bricking every request.
@@ -113,7 +185,7 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
   const redact = (msg: string): string =>
     secrets.reduce((acc, secret) => acc.split(secret).join("[redacted]"), msg);
 
-  // Best-effort audit — a throwing/ rejecting audit hook never fails the request.
+  // Best-effort audit — a throwing/rejecting audit hook never fails the request.
   async function audit(record: AuditRecord): Promise<void> {
     if (!hooks.audit) return;
     try {
@@ -123,10 +195,34 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
     }
   }
 
+  // Git-truth control point (#259). Fired after a structural mutation commits.
+  // Best-effort: the BaoBox write is already authoritative, so a throwing
+  // `onMutation` must not fail the request — the failure is recorded via audit.
+  async function notifyMutation(event: SkillMutationEvent): Promise<void> {
+    if (!hooks.onMutation) return;
+    try {
+      await hooks.onMutation(event);
+    } catch {
+      await audit({
+        op: event.op,
+        tenantId,
+        ...(event.skillId ? { skillId: event.skillId } : {}),
+        ...(event.childSkillId ? { childSkillId: event.childSkillId } : {}),
+        ...(event.toolId ? { toolId: event.toolId } : {}),
+        outcome: "error",
+        error: { status: 500, code: "mutation_hook_failed" },
+      });
+    }
+  }
+
   // Run the authz hook; deny by returning `false` OR by throwing — both map to
   // AuthzDenied → 403. A throw is treated as denial (not a 500) so a host can
-  // `throw new Error("nope")` to reject; the message is preserved.
-  async function authorize(op: SkillStudioOp, skillId?: string): Promise<void> {
+  // `throw new Error("nope")` to reject; the message is preserved. Authorization
+  // always runs BEFORE any request body is read, on URL-derived context only.
+  async function authorize(
+    op: SkillStudioOp,
+    target?: { skillId?: string; childSkillId?: string; toolId?: string },
+  ): Promise<void> {
     if (!hooks.authz) {
       // Fail closed: no authz hook → deny, unless the host explicitly opted out.
       if (allowUnauthenticated) return;
@@ -134,7 +230,13 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
     }
     let verdict: boolean | void;
     try {
-      verdict = await hooks.authz({ op, tenantId, ...(skillId ? { skillId } : {}) });
+      verdict = await hooks.authz({
+        op,
+        tenantId,
+        ...(target?.skillId ? { skillId: target.skillId } : {}),
+        ...(target?.childSkillId ? { childSkillId: target.childSkillId } : {}),
+        ...(target?.toolId ? { toolId: target.toolId } : {}),
+      });
     } catch (err) {
       throw new AuthzDenied(err instanceof Error && err.message ? err.message : "Not authorized");
     }
@@ -145,16 +247,18 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
     c: Context,
     err: unknown,
     op: SkillStudioOp,
-    skillId?: string,
+    target?: { skillId?: string; childSkillId?: string; toolId?: string },
   ): Promise<Response> {
-    const e = toContractError(err);
+    const e = toContractError(err, op);
     // "denied" is reserved for a local authz rejection; any other failure
     // (including an upstream 403, should one ever occur) is "error".
     const denied = err instanceof AuthzDenied;
     await audit({
       op,
       tenantId,
-      ...(skillId ? { skillId } : {}),
+      ...(target?.skillId ? { skillId: target.skillId } : {}),
+      ...(target?.childSkillId ? { childSkillId: target.childSkillId } : {}),
+      ...(target?.toolId ? { toolId: target.toolId } : {}),
       outcome: denied ? "denied" : "error",
       error: { status: e.status, code: e.code },
     });
@@ -168,11 +272,23 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
           ...(e.requestId ? { requestId: redact(e.requestId) } : {}),
         },
       },
-      e.status as 400 | 403 | 404 | 500 | 502,
+      e.status as 400 | 403 | 404 | 409 | 422 | 500 | 502,
     );
   }
 
+  // Apply the host's source-of-truth detail decorator (if any) before responding.
+  async function decorateDetail(detail: SkillDetail, skillId: string): Promise<SkillDetail> {
+    if (hooks.sourceOfTruth?.detail) {
+      return hooks.sourceOfTruth.detail(detail, { tenantId, skillId });
+    }
+    return detail;
+  }
+
   const app = new Hono();
+
+  // -------------------------------------------------------------------------
+  // Phase 1 — list / get / single-field PATCH (unchanged behaviour).
+  // -------------------------------------------------------------------------
 
   // GET /skills → { data: SkillSummary[] }
   app.get("/skills", async (c) => {
@@ -194,15 +310,12 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
   app.get("/skills/:id", async (c) => {
     const id = c.req.param("id");
     try {
-      await authorize("get", id);
-      let detail: SkillDetail = await client.skills.get(id, { tenantId });
-      if (hooks.sourceOfTruth?.detail) {
-        detail = await hooks.sourceOfTruth.detail(detail, { tenantId, skillId: id });
-      }
+      await authorize("get", { skillId: id });
+      const detail = await decorateDetail(await client.skills.get(id, { tenantId }), id);
       await audit({ op: "get", tenantId, skillId: id, outcome: "allowed" });
       return c.json({ data: detail });
     } catch (err) {
-      return respondError(c, err, "get", id);
+      return respondError(c, err, "get", { skillId: id });
     }
   });
 
@@ -210,36 +323,20 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
   app.patch("/skills/:id", async (c) => {
     const id = c.req.param("id");
     try {
-      await authorize("update", id);
+      await authorize("update", { skillId: id });
       const raw = await c.req.json().catch(() => undefined);
       const parsed = skillUpdateRequestSchema.safeParse(raw);
       if (!parsed.success) {
-        await audit({
-          op: "update",
-          tenantId,
-          skillId: id,
-          outcome: "error",
-          error: { status: 400, code: "invalid_request" },
-        });
-        return c.json(
-          {
-            error: {
-              code: "invalid_request",
-              message: parsed.error.issues[0]?.message ?? "Invalid update request",
-            },
-          },
-          400,
-        );
+        return validationError(c, "update", id, parsed.error.issues[0]?.message);
       }
       const updatedField = Object.keys(parsed.data)[0];
+      const before = hooks.onMutation ? await client.skills.get(id, { tenantId }) : undefined;
       // SDK `update` returns a Skill (no files); the contract's PATCH returns a
       // full SkillDetail, so re-fetch the detail after writing. Both calls are
       // tenant-scoped, so a cross-tenant skill 404s on the write itself.
       await client.skills.update(id, parsed.data, { tenantId });
-      let detail: SkillDetail = await client.skills.get(id, { tenantId });
-      if (hooks.sourceOfTruth?.detail) {
-        detail = await hooks.sourceOfTruth.detail(detail, { tenantId, skillId: id });
-      }
+      const after = await client.skills.get(id, { tenantId });
+      await notifyMutation({ op: "update", tenantId, skillId: id, before, after });
       await audit({
         op: "update",
         tenantId,
@@ -247,11 +344,238 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
         outcome: "allowed",
         ...(updatedField ? { updatedField } : {}),
       });
-      return c.json({ data: detail });
+      return c.json({ data: await decorateDetail(after, id) });
     } catch (err) {
-      return respondError(c, err, "update", id);
+      return respondError(c, err, "update", { skillId: id });
     }
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 2 — authoring surface (#259).
+  // -------------------------------------------------------------------------
+
+  // POST /skills (create, tenant-owned) → { data: SkillDetail }
+  app.post("/skills", async (c) => {
+    try {
+      await authorize("create");
+      const raw = await c.req.json().catch(() => undefined);
+      const parsed = skillCreateRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return validationError(c, "create", undefined, parsed.error.issues[0]?.message);
+      }
+      // apiKey client → tenant-owned; the `{ tenantId }` scope is belt-and-braces.
+      const created = await client.skills.create(parsed.data, { tenantId });
+      const after = await client.skills.get(created.id, { tenantId });
+      await notifyMutation({ op: "create", tenantId, skillId: created.id, after });
+      await audit({ op: "create", tenantId, skillId: created.id, outcome: "allowed" });
+      return c.json({ data: await decorateDetail(after, created.id) }, 201);
+    } catch (err) {
+      return respondError(c, err, "create");
+    }
+  });
+
+  // PUT /skills/:id (structural multi-field update) → { data: SkillDetail }
+  app.put("/skills/:id", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("updateStructural", { skillId: id });
+      const raw = await c.req.json().catch(() => undefined);
+      const parsed = skillStructuralUpdateRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return validationError(c, "updateStructural", id, parsed.error.issues[0]?.message);
+      }
+      const updatedFields = Object.keys(parsed.data);
+      const before = hooks.onMutation ? await client.skills.get(id, { tenantId }) : undefined;
+      await client.skills.update(id, parsed.data, { tenantId });
+      const after = await client.skills.get(id, { tenantId });
+      await notifyMutation({ op: "updateStructural", tenantId, skillId: id, before, after });
+      await audit({ op: "updateStructural", tenantId, skillId: id, outcome: "allowed", updatedFields });
+      return c.json({ data: await decorateDetail(after, id) });
+    } catch (err) {
+      return respondError(c, err, "updateStructural", { skillId: id });
+    }
+  });
+
+  // GET /skills/:id/attached-skills → { data: SkillSummary[] }
+  app.get("/skills/:id/attached-skills", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("listAttachedSkills", { skillId: id });
+      const children = await client.skills.listAttachedSkills(id, { tenantId });
+      await audit({ op: "listAttachedSkills", tenantId, skillId: id, outcome: "allowed" });
+      return c.json({ data: children.map(toSkillSummary) });
+    } catch (err) {
+      return respondError(c, err, "listAttachedSkills", { skillId: id });
+    }
+  });
+
+  // POST /skills/:id/attached-skills (body: { childSkillId }) → { data: { attached } }
+  app.post("/skills/:id/attached-skills", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("attachSkill", { skillId: id });
+      const raw = await c.req.json().catch(() => undefined);
+      const parsed = attachSubSkillRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return validationError(c, "attachSkill", id, parsed.error.issues[0]?.message);
+      }
+      const childSkillId = parsed.data.childSkillId;
+      // 422 cycle_detected / 404 not_found propagate from the worker; mapped in catch.
+      await client.skills.attachSkill(id, childSkillId, { tenantId });
+      await notifyMutation({ op: "attachSkill", tenantId, skillId: id, childSkillId });
+      await audit({ op: "attachSkill", tenantId, skillId: id, childSkillId, outcome: "allowed" });
+      return c.json({ data: { attached: true } });
+    } catch (err) {
+      return respondError(c, err, "attachSkill", { skillId: id });
+    }
+  });
+
+  // DELETE /skills/:id/attached-skills/:childId → { data: { detached } }
+  app.delete("/skills/:id/attached-skills/:childId", async (c) => {
+    const id = c.req.param("id");
+    const childSkillId = c.req.param("childId");
+    try {
+      await authorize("detachSkill", { skillId: id, childSkillId });
+      await client.skills.detachSkill(id, childSkillId, { tenantId });
+      await notifyMutation({ op: "detachSkill", tenantId, skillId: id, childSkillId });
+      await audit({ op: "detachSkill", tenantId, skillId: id, childSkillId, outcome: "allowed" });
+      return c.json({ data: { detached: true } });
+    } catch (err) {
+      return respondError(c, err, "detachSkill", { skillId: id, childSkillId });
+    }
+  });
+
+  // GET /skills/:id/tools → { data: SkillToolSummary[] }
+  app.get("/skills/:id/tools", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("listTools", { skillId: id });
+      const tools = await client.skills.listTools(id, { tenantId });
+      // SECURITY: project to the lean summary — NEVER ship `handlerConfig` /
+      // `inputSchema` (which may carry callback secrets) to the browser.
+      const summaries: SkillToolSummary[] = tools.map((t) => ({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+      }));
+      await audit({ op: "listTools", tenantId, skillId: id, outcome: "allowed" });
+      return c.json({ data: summaries });
+    } catch (err) {
+      return respondError(c, err, "listTools", { skillId: id });
+    }
+  });
+
+  // POST /skills/:id/tools (body: { toolId }) → { data: { attached } }
+  app.post("/skills/:id/tools", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("attachTool", { skillId: id });
+      const raw = await c.req.json().catch(() => undefined);
+      const parsed = attachToolRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return validationError(c, "attachTool", id, parsed.error.issues[0]?.message);
+      }
+      const toolId = parsed.data.toolId;
+      // 403 off-allowlist → tool_not_allowed / 404 not_found propagate; mapped in catch.
+      await client.skills.attachTool(id, toolId, { tenantId });
+      await notifyMutation({ op: "attachTool", tenantId, skillId: id, toolId });
+      await audit({ op: "attachTool", tenantId, skillId: id, toolId, outcome: "allowed" });
+      return c.json({ data: { attached: true } });
+    } catch (err) {
+      return respondError(c, err, "attachTool", { skillId: id });
+    }
+  });
+
+  // DELETE /skills/:id/tools/:toolId → { data: { detached } }
+  app.delete("/skills/:id/tools/:toolId", async (c) => {
+    const id = c.req.param("id");
+    const toolId = c.req.param("toolId");
+    try {
+      await authorize("detachTool", { skillId: id, toolId });
+      await client.skills.detachTool(id, toolId, { tenantId });
+      await notifyMutation({ op: "detachTool", tenantId, skillId: id, toolId });
+      await audit({ op: "detachTool", tenantId, skillId: id, toolId, outcome: "allowed" });
+      return c.json({ data: { detached: true } });
+    } catch (err) {
+      return respondError(c, err, "detachTool", { skillId: id, toolId });
+    }
+  });
+
+  // GET /skills/:id/parameters → { data: SkillParameter[] }
+  app.get("/skills/:id/parameters", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("getParameters", { skillId: id });
+      // No store configured → the parameter feature is off for this deployment;
+      // a read is harmless (nothing is stored), so return an empty list.
+      const params = parameterStore
+        ? await parameterStore.get({ tenantId, skillId: id })
+        : [];
+      await audit({ op: "getParameters", tenantId, skillId: id, outcome: "allowed" });
+      return c.json({ data: maskSecretParameters(params) });
+    } catch (err) {
+      return respondError(c, err, "getParameters", { skillId: id });
+    }
+  });
+
+  // PUT /skills/:id/parameters (body: { parameters }) → { data: SkillParameter[] }
+  app.put("/skills/:id/parameters", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("setParameters", { skillId: id });
+      const raw = await c.req.json().catch(() => undefined);
+      const parsed = setSkillParametersRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return validationError(c, "setParameters", id, parsed.error.issues[0]?.message);
+      }
+      if (!parameterStore) {
+        // The route exists but the host hasn't wired durable storage. Refuse the
+        // write rather than silently dropping it.
+        return respondError(
+          c,
+          new AuthzDenied("Per-tenant parameters are not enabled (no parameter store configured)"),
+          "setParameters",
+          { skillId: id },
+        );
+      }
+      const stored = await parameterStore.set(parsed.data.parameters, { tenantId, skillId: id });
+      const result = maskSecretParameters(stored ?? parsed.data.parameters);
+      await notifyMutation({ op: "setParameters", tenantId, skillId: id });
+      await audit({ op: "setParameters", tenantId, skillId: id, outcome: "allowed" });
+      return c.json({ data: result });
+    } catch (err) {
+      return respondError(c, err, "setParameters", { skillId: id });
+    }
+  });
+
+  // Shared 400 path for a request-body schema failure. Uses the contract's
+  // stable `validation_error` code (the Web Component branches on it).
+  function validationError(
+    c: Context,
+    op: SkillStudioMutationOp,
+    skillId: string | undefined,
+    message?: string,
+  ): Response {
+    void audit({
+      op,
+      tenantId,
+      ...(skillId ? { skillId } : {}),
+      outcome: "error",
+      error: { status: 400, code: "validation_error" },
+    });
+    return c.json(
+      {
+        error: {
+          code: "validation_error" as ContractErrorCode,
+          // Defense-in-depth: a strict-schema parse on a body that smuggled a
+          // credential-named key echoes that key in the Zod message — redact it,
+          // exactly as `respondError` does for every other error path.
+          message: redact(message ?? "Invalid request"),
+        },
+      },
+      400,
+    );
+  }
 
   return app;
 }

@@ -13,6 +13,9 @@
   "workspaces": [
     "packages/*"
   ],
+  "overrides": {
+    "@baobox/sdk": "^0.16.0"
+  },
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
     "build": "npm run build --workspace @baobox/skill-builder-contract && npm run build --workspaces --if-present",
