@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.2.0
+
+Full orchestrator authoring UI (#260) + BaoBox#264 Defect B.
+
+### Added
+
+- **Create-skill wizard** — `+ New skill` opens a form (name + system prompt
+  required; description / model optional); on create it navigates straight to the
+  new skill's detail so sub-skills / tools / parameters can be wired up.
+- **Structural editor** — the detail view now edits name, description, system
+  prompt, model, temperature, and max-tokens in one save (`PUT /skills/:id`),
+  sending only the changed fields (replaces the Phase-1 single-field description
+  edit in the UI).
+- **Sub-skill graph** — a DAG view of a skill's attached children with
+  attach (from a candidate picker) / detach, and **cycle-rejection UX**: the
+  contract `cycle_detected` (422) is surfaced as "would create a cycle in the
+  orchestrator graph."
+- **Tool wiring** — list attached tools (lean `{ id, name, description }`),
+  attach by id, detach. An off-allowlist attach is rejected server-side
+  (`tool_not_allowed`, 403) and surfaced as an allowlist message.
+- **Per-tenant parameters** — key / value (+ optional label, secret) editor
+  (`GET`/`PUT /skills/:id/parameters`). Secret values arrive masked and are
+  write-only in the UI.
+- **`isSystem` / `cloneable` (BaoBox#264 Defect B)** — a system skill renders
+  **read-only** (no editable form); when `cloneable`, a **"Copy as my own"**
+  action creates a tenant-owned copy and opens it. These fields ride through on
+  the wire as additive runtime properties (the SDK/BFF pass unknown response
+  fields through), so no contract release is required.
+
+### Changed
+
+- **Theming depth** — colors are now **CSS custom properties** (`--bb-bg`,
+  `--bb-fg`, `--bb-accent`, `--bb-radius`, …) defined on `:host` (with a
+  `theme="dark"` override) and injected into the shadow root, so a host page can
+  brand the element from its own CSS. The `theme` attribute still selects the
+  built-in light/dark defaults.
+- Bumped `@baobox/skill-builder-contract` to `^0.2.0`.
+
+### Unchanged (by design)
+
+- Still reads **everything** from `api-base` (the tenant BFF) with
+  `credentials: "same-origin"`, never calls BaoBox, never imports `@baobox/sdk`,
+  and never holds a credential. Standalone bundle + React wrapper unchanged in
+  shape; pin/SRI story unchanged.
+
 ## 0.1.0
 
 Initial release — the Phase-1 Skill Studio Web Component (Epic baobox#244, ν1.4 /
