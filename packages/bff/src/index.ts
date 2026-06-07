@@ -567,7 +567,10 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
       {
         error: {
           code: "validation_error" as ContractErrorCode,
-          message: message ?? "Invalid request",
+          // Defense-in-depth: a strict-schema parse on a body that smuggled a
+          // credential-named key echoes that key in the Zod message — redact it,
+          // exactly as `respondError` does for every other error path.
+          message: redact(message ?? "Invalid request"),
         },
       },
       400,

@@ -444,4 +444,57 @@ describe("onMutation is best-effort", () => {
       expect.objectContaining({ op: "create", outcome: "error" }),
     );
   });
+
+  it("isolates a throwing onMutation across structural update, attach, and tool ops", async () => {
+    const throwing = {
+      onMutation: () => {
+        throw new Error("promote-back queue down");
+      },
+    };
+    // structural PUT
+    expect((await putJson(makeBff(makeStub(), throwing), "/skills/sk_1", { name: "Z" })).status).toBe(200);
+    // attach sub-skill
+    expect(
+      (await postJson(makeBff(makeStub(), throwing), "/skills/sk_1/attached-skills", { childSkillId: "sk_2" })).status,
+    ).toBe(200);
+    // attach tool
+    expect(
+      (await postJson(makeBff(makeStub(), throwing), "/skills/sk_1/tools", { toolId: "tl_1" })).status,
+    ).toBe(200);
+  });
+});
+
+describe("secret hygiene — validation errors never echo a credential (#259 review)", () => {
+  it("redacts a credential-named smuggled key from the 400 validation message", async () => {
+    const API_KEY = "skb_tenant_key_DO-NOT-LEAK";
+    const stub = makeStub();
+    // A strict-schema parse reports the unrecognized key in its message; if that
+    // key name IS the credential, it must be redacted before it reaches the wire.
+    const app = createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      apiKey: API_KEY,
+      tenantId: TENANT,
+      client: stub.client,
+      allowUnauthenticated: true,
+    });
+    const res = await postJson(app, "/skills", { name: "X", systemPrompt: "p", [API_KEY]: "v" });
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(text).not.toContain(API_KEY);
+    expect(stub.calls.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("tenant-scope is threaded on every read (#259 review)", () => {
+  it("listAttachedSkills / listTools / getParameters pass { tenantId } to the SDK / store", async () => {
+    const stub = makeStub();
+    const get = vi.fn(async () => []);
+    const app = makeBff(stub, { parameters: { get, set: async () => {} } });
+    await app.request("/skills/sk_1/attached-skills");
+    await app.request("/skills/sk_1/tools");
+    await app.request("/skills/sk_1/parameters");
+    expect(stub.calls.listAttachedSkills).toHaveBeenCalledWith("sk_1", { tenantId: TENANT });
+    expect(stub.calls.listTools).toHaveBeenCalledWith("sk_1", { tenantId: TENANT });
+    expect(get).toHaveBeenCalledWith({ tenantId: TENANT, skillId: "sk_1" });
+  });
 });
