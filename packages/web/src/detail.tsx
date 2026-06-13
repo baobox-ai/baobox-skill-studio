@@ -7,6 +7,7 @@ import type {
   SkillSummary,
   SkillToolSummary,
 } from "./api.js";
+import { type ModelFamily, MODEL_CATALOG, getModelFamily, getReasoningEfforts } from "./modelCatalog.js";
 import type { Palette } from "./theme.js";
 import {
   cardStyle,
@@ -37,6 +38,8 @@ type EditDraft = {
   model: string;
   temperature: string;
   maxTokens: string;
+  // reasoningEffort is optional — only relevant for reasoning-family models.
+  reasoningEffort: string;
 };
 
 function toDraft(d: SkillDetail): EditDraft {
@@ -47,6 +50,7 @@ function toDraft(d: SkillDetail): EditDraft {
     model: d.model,
     temperature: String(d.temperature),
     maxTokens: String(d.maxTokens),
+    reasoningEffort: d.reasoningEffort ?? "medium",
   };
 }
 
@@ -182,6 +186,160 @@ function ReadOnlySkill({
 }
 
 // ---------------------------------------------------------------------------
+// Model picker — combobox backed by a static catalog grouped by provider (#302).
+// Free-text entry is always allowed (typed value is used as-is when not in
+// the catalog). The <datalist> approach keeps it a native <input> so
+// accessibility and keyboard behavior are handled by the browser.
+// ---------------------------------------------------------------------------
+const MODEL_DATALIST_ID = "bb-skill-model-list";
+
+function ModelPicker({
+  value,
+  onChange,
+  palette: p,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  palette: Palette;
+  disabled?: boolean;
+}) {
+  return (
+    <>
+      <input
+        id="bb-model"
+        type="text"
+        aria-label="Model"
+        list={MODEL_DATALIST_ID}
+        value={value}
+        disabled={disabled}
+        onInput={(e) => onChange((e.currentTarget as HTMLInputElement).value)}
+        style={inputStyle(p)}
+        placeholder="e.g. MiniMax-M2.7"
+        autoComplete="off"
+      />
+      <datalist id={MODEL_DATALIST_ID}>
+        {MODEL_CATALOG.map((provider) => (
+          <optgroup key={provider.id} label={provider.label}>
+            {provider.models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {provider.label} / {m.label}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </datalist>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Model-family-aware parameter panel (#302).
+//   - reasoning models → reasoningEffort selector (options driven by the
+//     selected model's valid set via getReasoningEfforts), no temperature/maxTokens
+//   - sampling models (or unknown/free-text) → temperature + maxTokens, no
+//     reasoningEffort
+// ---------------------------------------------------------------------------
+
+// Human-readable labels for each effort value.
+const EFFORT_LABELS: Record<string, string> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+};
+
+function ModelParamPanel({
+  model,
+  modelFamily,
+  temperature,
+  maxTokens,
+  reasoningEffort,
+  onTemperature,
+  onMaxTokens,
+  onReasoningEffort,
+  palette: p,
+  disabled,
+}: {
+  model: string;
+  modelFamily: ModelFamily | undefined;
+  temperature: string;
+  maxTokens: string;
+  reasoningEffort: string;
+  onTemperature: (v: string) => void;
+  onMaxTokens: (v: string) => void;
+  onReasoningEffort: (v: string) => void;
+  palette: Palette;
+  disabled?: boolean;
+}) {
+  if (modelFamily === "reasoning") {
+    // Per-model valid set; falls back to full set for unknown free-text models.
+    const effortOptions = getReasoningEfforts(model) ?? ["minimal", "low", "medium", "high"];
+    return (
+      <div style={{ flex: 2 }}>
+        <label style={labelStyle()} for="bb-effort">
+          Reasoning Effort
+        </label>
+        <select
+          id="bb-effort"
+          aria-label="Reasoning Effort"
+          value={reasoningEffort}
+          disabled={disabled}
+          onChange={(e) => onReasoningEffort((e.currentTarget as HTMLSelectElement).value)}
+          style={inputStyle(p)}
+        >
+          {effortOptions.map((v) => (
+            <option key={v} value={v}>
+              {EFFORT_LABELS[v] ?? v}
+            </option>
+          ))}
+        </select>
+      </div>
+    );
+  }
+
+  // sampling family (or unknown/free-text model) — show temperature + maxTokens
+  return (
+    <>
+      <div style={{ flex: 1 }}>
+        <label style={labelStyle()} for="bb-temp">
+          Temperature
+        </label>
+        <input
+          id="bb-temp"
+          aria-label="Temperature"
+          type="number"
+          step="0.1"
+          min="0"
+          max="2"
+          value={temperature}
+          disabled={disabled}
+          onInput={(e) => onTemperature((e.currentTarget as HTMLInputElement).value)}
+          style={inputStyle(p)}
+        />
+      </div>
+      <div style={{ flex: 1 }}>
+        <label style={labelStyle()} for="bb-max">
+          Max Tokens
+        </label>
+        <input
+          id="bb-max"
+          aria-label="Max Tokens"
+          type="number"
+          min="1"
+          value={maxTokens}
+          disabled={disabled}
+          onInput={(e) => onMaxTokens((e.currentTarget as HTMLInputElement).value)}
+          style={inputStyle(p)}
+        />
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Tenant-owned skill — full structural edit + orchestrator panels.
 // ---------------------------------------------------------------------------
 function EditableSkill({
@@ -208,13 +366,22 @@ function EditableSkill({
     setSaved(false);
   }
 
+  // Derive the model family for the current draft model — drives param panel.
+  const modelFamily = getModelFamily(draft.model);
+
   // Validate the numeric fields against the contract's bounds before they can be
   // marked dirty / submitted (temperature 0–2; maxTokens a positive integer).
+  // Skip numeric validation for reasoning models (those fields aren't sent).
   const tempNum = Number(draft.temperature);
   const tempInvalid =
-    draft.temperature.trim() !== "" && (!Number.isFinite(tempNum) || tempNum < 0 || tempNum > 2);
+    modelFamily !== "reasoning" &&
+    draft.temperature.trim() !== "" &&
+    (!Number.isFinite(tempNum) || tempNum < 0 || tempNum > 2);
   const maxNum = Number(draft.maxTokens);
-  const maxInvalid = draft.maxTokens.trim() !== "" && (!Number.isInteger(maxNum) || maxNum < 1);
+  const maxInvalid =
+    modelFamily !== "reasoning" &&
+    draft.maxTokens.trim() !== "" &&
+    (!Number.isInteger(maxNum) || maxNum < 1);
   const numericError = tempInvalid
     ? "Temperature must be a number between 0 and 2."
     : maxInvalid
@@ -228,11 +395,13 @@ function EditableSkill({
     if (draft.description !== detail.description) out.description = draft.description;
     if (draft.systemPrompt !== detail.systemPrompt) out.systemPrompt = draft.systemPrompt;
     if (draft.model !== detail.model) out.model = draft.model;
-    if (!tempInvalid && draft.temperature.trim() !== "" && tempNum !== detail.temperature) {
-      out.temperature = tempNum;
-    }
-    if (!maxInvalid && draft.maxTokens.trim() !== "" && maxNum !== detail.maxTokens) {
-      out.maxTokens = maxNum;
+    if (modelFamily !== "reasoning") {
+      if (!tempInvalid && draft.temperature.trim() !== "" && tempNum !== detail.temperature) {
+        out.temperature = tempNum;
+      }
+      if (!maxInvalid && draft.maxTokens.trim() !== "" && maxNum !== detail.maxTokens) {
+        out.maxTokens = maxNum;
+      }
     }
     return out;
   }
@@ -307,49 +476,31 @@ function EditableSkill({
         style={inputStyle(p)}
       />
 
+      {/* Model picker + family-aware parameter panel (#302) */}
       <div style={{ display: "flex", gap: "0.75rem" }}>
         <div style={{ flex: 2 }}>
           <label style={labelStyle()} for="bb-model">
             Model
           </label>
-          <input
-            id="bb-model"
-            aria-label="Model"
+          <ModelPicker
             value={draft.model}
-            onInput={(e) => set("model", (e.currentTarget as HTMLInputElement).value)}
-            style={inputStyle(p)}
+            onChange={(v) => set("model", v)}
+            palette={p}
+            disabled={saving}
           />
         </div>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle()} for="bb-temp">
-            Temperature
-          </label>
-          <input
-            id="bb-temp"
-            aria-label="Temperature"
-            type="number"
-            step="0.1"
-            min="0"
-            max="2"
-            value={draft.temperature}
-            onInput={(e) => set("temperature", (e.currentTarget as HTMLInputElement).value)}
-            style={inputStyle(p)}
-          />
-        </div>
-        <div style={{ flex: 1 }}>
-          <label style={labelStyle()} for="bb-max">
-            Max tokens
-          </label>
-          <input
-            id="bb-max"
-            aria-label="Max tokens"
-            type="number"
-            min="1"
-            value={draft.maxTokens}
-            onInput={(e) => set("maxTokens", (e.currentTarget as HTMLInputElement).value)}
-            style={inputStyle(p)}
-          />
-        </div>
+        <ModelParamPanel
+          model={draft.model}
+          modelFamily={modelFamily}
+          temperature={draft.temperature}
+          maxTokens={draft.maxTokens}
+          reasoningEffort={draft.reasoningEffort}
+          onTemperature={(v) => set("temperature", v)}
+          onMaxTokens={(v) => set("maxTokens", v)}
+          onReasoningEffort={(v) => set("reasoningEffort", v)}
+          palette={p}
+          disabled={saving}
+        />
       </div>
 
       {numericError && (

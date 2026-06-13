@@ -1,6 +1,16 @@
 import type { Skill, SkillFileReference, SkillWithFiles } from "@baobox/sdk";
 import { z } from "zod";
 
+// ---------------------------------------------------------------------------
+// Reasoning effort — the new optional parameter for reasoning-class models
+// (gpt-5 family, o-series). `minimal` is the lowest tier (below `low`).
+// ADDITIVE: absent on classic sampling models; ignored/stripped by the BaoBox
+// worker when sent for a sampling model.
+// ---------------------------------------------------------------------------
+export const REASONING_EFFORT_VALUES = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type ReasoningEffort = (typeof REASONING_EFFORT_VALUES)[number];
+export const reasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
+
 // The Skill Studio contract does NOT redefine skill fields. The canonical
 // payload shapes are owned by `@baobox/sdk` and re-exported here so the BFF
 // (#248) and the Web Component (#249) consume one source of truth and cannot
@@ -63,7 +73,12 @@ export function toSkillSummary(skill: Skill): SkillSummary {
 // would turn a non-breaking SDK addition into a runtime parse failure. The
 // untrusted input schema (`skillUpdateRequestSchema`) is the one that's strict.
 // ---------------------------------------------------------------------------
-export type SkillDetail = SkillWithFiles;
+
+// `SkillDetail` extends the SDK's `SkillWithFiles` with the optional
+// `reasoningEffort` field (absent on sampling models, present on reasoning
+// models). The SDK type itself is not changed — we intersect here so Studio
+// can store/display the field while the BaoBox wire type remains stable.
+export type SkillDetail = SkillWithFiles & { reasoningEffort?: ReasoningEffort };
 
 export const skillFileReferenceSchema = z.object({
   path: z.string(),
@@ -78,6 +93,9 @@ export const skillDetailSchema = z.object({
   model: z.string(),
   temperature: z.number(),
   maxTokens: z.number(),
+  // `reasoningEffort` is additive — absent for sampling models, present for
+  // reasoning-class models (gpt-5 family, o-series).
+  reasoningEffort: reasoningEffortSchema.optional(),
   sourceUrl: z.string().nullable(),
   tenantId: z.string().nullable(),
   createdAt: z.string(),
@@ -86,10 +104,18 @@ export const skillDetailSchema = z.object({
 });
 
 // Compile-time drift guards — schema ⇄ SDK, BOTH directions:
-//   - SDK → schema: a real `SkillWithFiles` satisfies every schema field, so
-//     if the schema gains a required field the SDK lacks, this stops compiling.
-//   - schema → SDK: the schema-inferred type satisfies `SkillWithFiles`, so if
-//     the SDK gains a required field the schema lacks, this stops compiling.
+//   - SDK → schema: a real `SkillWithFiles` satisfies the schema's required
+//     fields. `reasoningEffort` is optional so the SDK value (which lacks it)
+//     still satisfies the schema type — no compile error if SDK stays stable.
+//   - schema → SDK: the schema-inferred type (which has `reasoningEffort?`)
+//     satisfies `SkillWithFiles` because extra optional fields are permitted
+//     in structural typing. If the SDK gains a REQUIRED field the schema
+//     lacks, this stops compiling — the guard remains effective.
+//
+// NOTE: the guards deliberately test only the SDK-originated fields, not
+// `reasoningEffort`, because that field originates in this contract (not the
+// SDK). Adding it as required to the SDK type would break the guard — keep it
+// optional here and in `SkillDetail` above.
 const _detailFromSdk = (s: SkillWithFiles): z.infer<typeof skillDetailSchema> => s;
 const _detailToSdk = (s: z.infer<typeof skillDetailSchema>): SkillWithFiles => s;
 const _fileRefMatch = (f: SkillFileReference): z.infer<typeof skillFileReferenceSchema> => f;
@@ -111,6 +137,10 @@ export const skillUpdateRequestSchema = z
     model: z.string().min(1).optional(),
     temperature: z.number().min(0).max(2).optional(),
     maxTokens: z.number().int().positive().optional(),
+    // `reasoningEffort` is optional and additive — valid only for reasoning
+    // models, but the contract accepts it here (the BaoBox worker enforces
+    // model compatibility server-side).
+    reasoningEffort: reasoningEffortSchema.optional(),
   })
   .strict()
   .refine((body) => Object.keys(body).length === 1, {
@@ -118,16 +148,20 @@ export const skillUpdateRequestSchema = z
   });
 export type SkillUpdateRequest = z.infer<typeof skillUpdateRequestSchema>;
 
-// Compile-time: the editable update fields track `@baobox/sdk`'s `Skill`. If the
-// SDK renames/retypes one of these (e.g. `temperature: number` → `string`), an
-// un-refined update payload stops being assignable here and this fails to
-// compile — keeping the write contract honest against the canonical type.
+// Compile-time: the SDK-originated editable update fields track `@baobox/sdk`'s
+// `Skill`. If the SDK renames/retypes one of these (e.g. `temperature: number`
+// → `string`), an un-refined update payload stops being assignable here and
+// this fails to compile — keeping the write contract honest.
+//
+// `reasoningEffort` is NOT included in this subset guard because it does not
+// exist on the SDK `Skill` type — it is a contract-level extension. Adding it
+// here would break the assignability check in the other direction.
 type EditableSkillFields = Partial<
   Pick<Skill, "name" | "description" | "systemPrompt" | "model" | "temperature" | "maxTokens">
->;
+> & { reasoningEffort?: ReasoningEffort };
 // `.refine()` doesn't change the inferred type, so `SkillUpdateRequest` is the
-// plain `{ name?, description?, ... }` object — assignable to the editable
-// subset of `Skill` only while their field types agree.
+// plain `{ name?, description?, ..., reasoningEffort? }` object — the SDK-
+// originated fields remain assignable to Skill only while their types agree.
 const _updateTracksSkill = (u: SkillUpdateRequest): EditableSkillFields => u;
 void _updateTracksSkill;
 

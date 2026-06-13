@@ -1,10 +1,12 @@
 import type { Skill, SkillWithFiles } from "@baobox/sdk";
 import { describe, expect, it } from "vitest";
 import {
+  REASONING_EFFORT_VALUES,
   attachSubSkillRequestSchema,
   attachToolRequestSchema,
   contractErrorSchema,
   listSkillsResponseSchema,
+  reasoningEffortSchema,
   setSkillParametersRequestSchema,
   skillCreateRequestSchema,
   skillDetailResponseSchema,
@@ -84,6 +86,50 @@ describe("skillUpdateRequestSchema", () => {
 
   it("rejects out-of-range temperature", () => {
     expect(skillUpdateRequestSchema.safeParse({ temperature: 5 }).success).toBe(false);
+  });
+
+  it("accepts reasoningEffort as a single-field edit", () => {
+    for (const effort of REASONING_EFFORT_VALUES) {
+      expect(skillUpdateRequestSchema.safeParse({ reasoningEffort: effort }).success).toBe(true);
+    }
+  });
+
+  it("rejects an invalid reasoningEffort value", () => {
+    expect(skillUpdateRequestSchema.safeParse({ reasoningEffort: "ultra" }).success).toBe(false);
+    expect(skillUpdateRequestSchema.safeParse({ reasoningEffort: "max" }).success).toBe(false);
+  });
+});
+
+describe("reasoningEffortSchema", () => {
+  it("accepts all six tiers (full OpenAI set)", () => {
+    expect(REASONING_EFFORT_VALUES).toEqual(["none", "minimal", "low", "medium", "high", "xhigh"]);
+    for (const tier of REASONING_EFFORT_VALUES) {
+      expect(reasoningEffortSchema.safeParse(tier).success).toBe(true);
+    }
+  });
+
+  it("rejects unknown strings", () => {
+    expect(reasoningEffortSchema.safeParse("ultra").success).toBe(false);
+    expect(reasoningEffortSchema.safeParse("").success).toBe(false);
+  });
+});
+
+describe("skillDetailSchema with reasoningEffort", () => {
+  it("accepts a skill without reasoningEffort (sampling model)", () => {
+    const r = skillDetailSchema.safeParse(sdkSkillWithFiles);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.reasoningEffort).toBeUndefined();
+  });
+
+  it("accepts a skill with a valid reasoningEffort (reasoning model)", () => {
+    const r = skillDetailSchema.safeParse({ ...sdkSkillWithFiles, reasoningEffort: "high" });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.reasoningEffort).toBe("high");
+  });
+
+  it("rejects an invalid reasoningEffort value", () => {
+    const r = skillDetailSchema.safeParse({ ...sdkSkillWithFiles, reasoningEffort: "max" });
+    expect(r.success).toBe(false);
   });
 });
 
