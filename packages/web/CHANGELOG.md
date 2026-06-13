@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1
+
+Model-aware model picker + reasoning effort (#11 / #302).
+
+- Catalog-fed model picker grouped by provider (free-text still allowed); the
+  parameter panel switches by model family (reasoning → effort; sampling →
+  temperature/maxTokens).
+- The reasoning-effort selector is **model-aware** — it offers only the tiers
+  the selected model accepts (gpt-5/-mini/-nano → minimal/low/medium/high;
+  gpt-5.4/5.5 → none/low/medium/high/xhigh). Added gpt-5.4 / gpt-5.5 to the
+  catalog. Bumps `@baobox/skill-builder-contract` to `^0.2.1`.
+
 ## 0.2.0
 
 Full orchestrator authoring UI (#260) + BaoBox#264 Defect B.
