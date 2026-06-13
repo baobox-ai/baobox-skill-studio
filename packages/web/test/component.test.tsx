@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SkillDetail, SkillStudioApi } from "../src/api.js";
 import { registerSkillBuilder } from "../src/element.js";
 import { SkillStudio } from "../src/SkillStudio.js";
+import { MODEL_CATALOG } from "../src/modelCatalog.js";
 
 const detail: SkillDetail = {
   id: "sk_1",
@@ -260,5 +261,86 @@ describe("registerSkillBuilder", () => {
     expect(registerSkillBuilder()).toBe("baobox-skill-builder");
     expect(customElements.get("baobox-skill-builder")).toBeTruthy();
     expect(() => registerSkillBuilder()).not.toThrow();
+  });
+});
+
+describe("model catalog", () => {
+  it("covers at least three providers", () => {
+    expect(MODEL_CATALOG.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("includes MiniMax-M2.7 as a sampling model", () => {
+    const minimax = MODEL_CATALOG.find((p) => p.id === "minimax");
+    expect(minimax).toBeTruthy();
+    const m27 = minimax?.models.find((m) => m.id === "MiniMax-M2.7");
+    expect(m27?.family).toBe("sampling");
+  });
+
+  it("marks gpt-5 / gpt-5-mini / gpt-5-nano as reasoning models", () => {
+    const openai = MODEL_CATALOG.find((p) => p.id === "openai");
+    expect(openai).toBeTruthy();
+    for (const id of ["gpt-5", "gpt-5-mini", "gpt-5-nano"]) {
+      const m = openai?.models.find((m) => m.id === id);
+      expect(m?.family, `${id} should be reasoning`).toBe("reasoning");
+    }
+  });
+});
+
+describe("<SkillStudio> model picker", () => {
+  it("renders a model input in the detail view", async () => {
+    render(<SkillStudio apiBase="/bff" api={mockApi()} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+    // The model input is labelled "Model" and pre-filled with the skill's model
+    const modelInput = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    expect(modelInput.value).toBe("MiniMax-M2.7");
+  });
+
+  it("shows temperature and maxTokens for a sampling model (MiniMax-M2.7)", async () => {
+    render(<SkillStudio apiBase="/bff" api={mockApi()} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+    // MiniMax-M2.7 is a sampling model → temperature + maxTokens visible
+    expect(await screen.findByLabelText("Temperature")).toBeTruthy();
+    expect(screen.getByLabelText("Max Tokens")).toBeTruthy();
+    // reasoningEffort selector must NOT be in the DOM
+    expect(screen.queryByLabelText("Reasoning Effort")).toBeNull();
+  });
+
+  it("shows reasoningEffort and hides temperature/maxTokens for a reasoning model (gpt-5)", async () => {
+    const reasoningDetail = {
+      ...detail,
+      model: "gpt-5",
+      reasoningEffort: "medium" as const,
+    };
+    const api = mockApi({
+      getSkill: vi.fn(async () => reasoningDetail),
+    });
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+
+    // wait for detail to load
+    await screen.findByLabelText("Model");
+
+    // switch to gpt-5 via the model input
+    const modelInput = screen.getByLabelText("Model") as HTMLInputElement;
+    fireEvent.input(modelInput, { target: { value: "gpt-5" } });
+
+    // reasoning effort selector should appear
+    expect(await screen.findByLabelText("Reasoning Effort")).toBeTruthy();
+    // temperature + maxTokens must be hidden
+    expect(screen.queryByLabelText("Temperature")).toBeNull();
+    expect(screen.queryByLabelText("Max Tokens")).toBeNull();
+  });
+
+  it("accepts a free-text model (not in catalog) and defaults to sampling params", async () => {
+    render(<SkillStudio apiBase="/bff" api={mockApi()} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+
+    const modelInput = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    fireEvent.input(modelInput, { target: { value: "my-custom-model-xyz" } });
+
+    // free-text → family unknown → sampling panel shown
+    expect(screen.getByLabelText("Temperature")).toBeTruthy();
+    expect(screen.getByLabelText("Max Tokens")).toBeTruthy();
+    expect(screen.queryByLabelText("Reasoning Effort")).toBeNull();
   });
 });
