@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1
+
+Model-aware reasoning effort (#11 / #302). **Additive, backward compatible.**
+
+- `REASONING_EFFORT_VALUES` widened to the full OpenAI-SDK set:
+  `["none", "minimal", "low", "medium", "high", "xhigh"]` (was
+  `["minimal","low","medium","high"]`). `ReasoningEffort` and
+  `reasoningEffortSchema` derive from it. Which tiers a model accepts is
+  model-dependent and enforced server-side; the schema accepts the full set.
+- No breaking changes: existing fields and routes unchanged; the drift guard
+  vs `@baobox/sdk` skill types still holds.
+
 ## 0.2.0
 
 Phase-2 authoring surface (#258). **Backward compatible** — every Phase-1 shape
