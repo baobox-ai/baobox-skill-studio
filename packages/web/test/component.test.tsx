@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SkillDetail, SkillStudioApi } from "../src/api.js";
 import { registerSkillBuilder } from "../src/element.js";
 import { SkillStudio } from "../src/SkillStudio.js";
-import { MODEL_CATALOG } from "../src/modelCatalog.js";
+import { MODEL_CATALOG, getReasoningEfforts } from "../src/modelCatalog.js";
 
 const detail: SkillDetail = {
   id: "sk_1",
@@ -283,6 +283,56 @@ describe("model catalog", () => {
       const m = openai?.models.find((m) => m.id === id);
       expect(m?.family, `${id} should be reasoning`).toBe("reasoning");
     }
+  });
+
+  it("marks gpt-5.4 and gpt-5.5 as reasoning models", () => {
+    const openai = MODEL_CATALOG.find((p) => p.id === "openai");
+    expect(openai).toBeTruthy();
+    for (const id of ["gpt-5.4", "gpt-5.5"]) {
+      const m = openai?.models.find((m) => m.id === id);
+      expect(m?.family, `${id} should be reasoning`).toBe("reasoning");
+    }
+  });
+});
+
+describe("getReasoningEfforts — per-model effort sets", () => {
+  it("gpt-5 offers minimal but NOT xhigh or none", () => {
+    const efforts = getReasoningEfforts("gpt-5");
+    expect(efforts).toContain("minimal");
+    expect(efforts).not.toContain("xhigh");
+    expect(efforts).not.toContain("none");
+  });
+
+  it("gpt-5-mini and gpt-5-nano share the same restricted set as gpt-5", () => {
+    for (const id of ["gpt-5-mini", "gpt-5-nano"]) {
+      const efforts = getReasoningEfforts(id);
+      expect(efforts, `${id} should include minimal`).toContain("minimal");
+      expect(efforts, `${id} should not include xhigh`).not.toContain("xhigh");
+      expect(efforts, `${id} should not include none`).not.toContain("none");
+    }
+  });
+
+  it("gpt-5.5 offers xhigh and none but NOT minimal", () => {
+    const efforts = getReasoningEfforts("gpt-5.5");
+    expect(efforts).toContain("xhigh");
+    expect(efforts).toContain("none");
+    expect(efforts).not.toContain("minimal");
+  });
+
+  it("gpt-5.4 offers xhigh and none but NOT minimal", () => {
+    const efforts = getReasoningEfforts("gpt-5.4");
+    expect(efforts).toContain("xhigh");
+    expect(efforts).toContain("none");
+    expect(efforts).not.toContain("minimal");
+  });
+
+  it("sampling model (MiniMax-M2.7) returns undefined", () => {
+    expect(getReasoningEfforts("MiniMax-M2.7")).toBeUndefined();
+  });
+
+  it("unknown free-text model returns the full 6-value set", () => {
+    const efforts = getReasoningEfforts("my-custom-model-xyz");
+    expect(efforts).toEqual(["none", "minimal", "low", "medium", "high", "xhigh"]);
   });
 });
 

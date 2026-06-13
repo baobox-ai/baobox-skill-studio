@@ -7,7 +7,7 @@ import type {
   SkillSummary,
   SkillToolSummary,
 } from "./api.js";
-import { type ModelFamily, MODEL_CATALOG, getModelFamily } from "./modelCatalog.js";
+import { type ModelFamily, MODEL_CATALOG, getModelFamily, getReasoningEfforts } from "./modelCatalog.js";
 import type { Palette } from "./theme.js";
 import {
   cardStyle,
@@ -235,18 +235,24 @@ function ModelPicker({
 
 // ---------------------------------------------------------------------------
 // Model-family-aware parameter panel (#302).
-//   - reasoning models → reasoningEffort selector, no temperature/maxTokens
+//   - reasoning models → reasoningEffort selector (options driven by the
+//     selected model's valid set via getReasoningEfforts), no temperature/maxTokens
 //   - sampling models (or unknown/free-text) → temperature + maxTokens, no
 //     reasoningEffort
 // ---------------------------------------------------------------------------
-const REASONING_EFFORT_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: "minimal", label: "Minimal" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-];
+
+// Human-readable labels for each effort value.
+const EFFORT_LABELS: Record<string, string> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+};
 
 function ModelParamPanel({
+  model,
   modelFamily,
   temperature,
   maxTokens,
@@ -257,6 +263,7 @@ function ModelParamPanel({
   palette: p,
   disabled,
 }: {
+  model: string;
   modelFamily: ModelFamily | undefined;
   temperature: string;
   maxTokens: string;
@@ -268,6 +275,8 @@ function ModelParamPanel({
   disabled?: boolean;
 }) {
   if (modelFamily === "reasoning") {
+    // Per-model valid set; falls back to full set for unknown free-text models.
+    const effortOptions = getReasoningEfforts(model) ?? ["minimal", "low", "medium", "high"];
     return (
       <div style={{ flex: 2 }}>
         <label style={labelStyle()} for="bb-effort">
@@ -281,9 +290,9 @@ function ModelParamPanel({
           onChange={(e) => onReasoningEffort((e.currentTarget as HTMLSelectElement).value)}
           style={inputStyle(p)}
         >
-          {REASONING_EFFORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
+          {effortOptions.map((v) => (
+            <option key={v} value={v}>
+              {EFFORT_LABELS[v] ?? v}
             </option>
           ))}
         </select>
@@ -481,6 +490,7 @@ function EditableSkill({
           />
         </div>
         <ModelParamPanel
+          model={draft.model}
           modelFamily={modelFamily}
           temperature={draft.temperature}
           maxTokens={draft.maxTokens}

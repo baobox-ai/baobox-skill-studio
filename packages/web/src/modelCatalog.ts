@@ -15,7 +15,15 @@
 // The `family` field drives the parameter panel:
 //   - "reasoning" → show `reasoningEffort` selector, hide temperature/maxTokens
 //   - "sampling"  → show temperature + maxTokens, hide reasoningEffort
+//
+// Per-model reasoning effort sets (OpenAI docs):
+//   - gpt-5 / gpt-5-mini / gpt-5-nano: ["minimal","low","medium","high"]
+//   - gpt-5.4 / gpt-5.5: ["none","low","medium","high","xhigh"]  (no "minimal")
+//   - o-series uses the same set as gpt-5 family by default
+//   - sampling models: no reasoning effort
 // ---------------------------------------------------------------------------
+
+import type { ReasoningEffort } from "@baobox/skill-builder-contract";
 
 export type ModelFamily = "reasoning" | "sampling";
 
@@ -25,6 +33,11 @@ export interface CatalogModel {
   /** Human-readable label shown in the picker. */
   label: string;
   family: ModelFamily;
+  /**
+   * The valid reasoning-effort values for this model (reasoning family only).
+   * Absent / undefined for sampling models.
+   */
+  reasoningEfforts?: ReasoningEffort[];
 }
 
 export interface CatalogProvider {
@@ -34,6 +47,12 @@ export interface CatalogProvider {
   label: string;
   models: CatalogModel[];
 }
+
+/** Effort set for gpt-5 / gpt-5-mini / gpt-5-nano and o-series. */
+const GPT5_EFFORTS: ReasoningEffort[] = ["minimal", "low", "medium", "high"];
+
+/** Effort set for gpt-5.4 / gpt-5.5 (drops "minimal", adds "none" + "xhigh"). */
+const GPT54_EFFORTS: ReasoningEffort[] = ["none", "low", "medium", "high", "xhigh"];
 
 export const MODEL_CATALOG: CatalogProvider[] = [
   {
@@ -47,12 +66,14 @@ export const MODEL_CATALOG: CatalogProvider[] = [
     id: "openai",
     label: "OpenAI",
     models: [
-      { id: "gpt-5", label: "GPT-5", family: "reasoning" },
-      { id: "gpt-5-mini", label: "GPT-5 mini", family: "reasoning" },
-      { id: "gpt-5-nano", label: "GPT-5 nano", family: "reasoning" },
-      { id: "o3", label: "o3", family: "reasoning" },
-      { id: "o3-mini", label: "o3-mini", family: "reasoning" },
-      { id: "o4-mini", label: "o4-mini", family: "reasoning" },
+      { id: "gpt-5", label: "GPT-5", family: "reasoning", reasoningEfforts: GPT5_EFFORTS },
+      { id: "gpt-5-mini", label: "GPT-5 mini", family: "reasoning", reasoningEfforts: GPT5_EFFORTS },
+      { id: "gpt-5-nano", label: "GPT-5 nano", family: "reasoning", reasoningEfforts: GPT5_EFFORTS },
+      { id: "gpt-5.4", label: "GPT-5.4", family: "reasoning", reasoningEfforts: GPT54_EFFORTS },
+      { id: "gpt-5.5", label: "GPT-5.5", family: "reasoning", reasoningEfforts: GPT54_EFFORTS },
+      { id: "o3", label: "o3", family: "reasoning", reasoningEfforts: GPT5_EFFORTS },
+      { id: "o3-mini", label: "o3-mini", family: "reasoning", reasoningEfforts: GPT5_EFFORTS },
+      { id: "o4-mini", label: "o4-mini", family: "reasoning", reasoningEfforts: GPT5_EFFORTS },
       { id: "gpt-4o", label: "GPT-4o", family: "sampling" },
       { id: "gpt-4o-mini", label: "GPT-4o mini", family: "sampling" },
     ],
@@ -80,6 +101,25 @@ export function getModelFamily(modelId: string): ModelFamily | undefined {
     if (found) return found.family;
   }
   return undefined;
+}
+
+/**
+ * Return the valid reasoning-effort values for a given model id.
+ *
+ * - Known reasoning model → the model's specific effort set (never the full 6-value set).
+ * - Known sampling model → undefined (no effort selector shown).
+ * - Unknown / free-text model → the full REASONING_EFFORT_VALUES set (best-effort fallback).
+ */
+export function getReasoningEfforts(modelId: string): ReasoningEffort[] | undefined {
+  for (const provider of MODEL_CATALOG) {
+    const found = provider.models.find((m) => m.id === modelId);
+    if (!found) continue;
+    if (found.family === "sampling") return undefined;
+    // Reasoning model: return its specific set (or full set if somehow absent).
+    return found.reasoningEfforts ?? (["minimal", "low", "medium", "high"] as ReasoningEffort[]);
+  }
+  // Free-text / unknown: return the full contract set so nothing is hidden.
+  return ["none", "minimal", "low", "medium", "high", "xhigh"] as ReasoningEffort[];
 }
 
 /** Flat list of `"Provider / Label"` strings for datalist option labels. */

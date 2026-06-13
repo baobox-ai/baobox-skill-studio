@@ -101,8 +101,8 @@ describe("skillUpdateRequestSchema", () => {
 });
 
 describe("reasoningEffortSchema", () => {
-  it("accepts all four tiers", () => {
-    expect(REASONING_EFFORT_VALUES).toEqual(["minimal", "low", "medium", "high"]);
+  it("accepts all six tiers (full OpenAI set)", () => {
+    expect(REASONING_EFFORT_VALUES).toEqual(["none", "minimal", "low", "medium", "high", "xhigh"]);
     for (const tier of REASONING_EFFORT_VALUES) {
       expect(reasoningEffortSchema.safeParse(tier).success).toBe(true);
     }

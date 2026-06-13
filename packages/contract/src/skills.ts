@@ -7,7 +7,7 @@ import { z } from "zod";
 // ADDITIVE: absent on classic sampling models; ignored/stripped by the BaoBox
 // worker when sent for a sampling model.
 // ---------------------------------------------------------------------------
-export const REASONING_EFFORT_VALUES = ["minimal", "low", "medium", "high"] as const;
+export const REASONING_EFFORT_VALUES = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORT_VALUES)[number];
 export const reasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
 
