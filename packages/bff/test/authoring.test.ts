@@ -63,7 +63,26 @@ interface StubImpl {
   listTools?: (id: string, opts?: { tenantId?: string }) => Promise<ReturnType<typeof tool>[]>;
   // top-level tools namespace (not skills-scoped)
   toolsList?: () => Promise<ReturnType<typeof tool>[]>;
+  // #320 — live model catalog
+  catalogList?: () => Promise<unknown>;
 }
+
+const MOCK_CATALOG = {
+  providers: [
+    {
+      id: "openai",
+      displayName: "OpenAI",
+      defaultModel: "openai/gpt-5",
+      docsUrl: "https://platform.openai.com/docs",
+      pricingUrl: "https://openai.com/pricing",
+      models: [
+        { id: "openai/gpt-5", displayName: "GPT-5", paramProfile: "reasoning", reasoningEfforts: ["minimal", "low", "medium", "high"] },
+        { id: "openai/gpt-4o", displayName: "GPT-4o", paramProfile: "sampling" },
+      ],
+    },
+  ],
+  reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+};
 
 function makeStub(impl: StubImpl = {}) {
   const calls = {
@@ -81,9 +100,12 @@ function makeStub(impl: StubImpl = {}) {
   const toolsCalls = {
     list: vi.fn(impl.toolsList ?? (async () => [])),
   };
+  const catalogCalls = {
+    list: vi.fn(impl.catalogList ?? (async () => MOCK_CATALOG)),
+  };
   // biome-ignore lint/suspicious/noExplicitAny: test stub stands in for BaoBoxClient
-  const client = { skills: calls, tools: toolsCalls } as any;
-  return { client, calls, toolsCalls };
+  const client = { skills: calls, tools: toolsCalls, catalog: catalogCalls } as any;
+  return { client, calls, toolsCalls, catalogCalls };
 }
 
 function makeBff(
@@ -579,5 +601,77 @@ describe("listAvailableTools — GET /tools", () => {
     expect(records).toContainEqual(
       expect.objectContaining({ op: "listAvailableTools", tenantId: TENANT, outcome: "allowed" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /models — listModels (#320)
+// ---------------------------------------------------------------------------
+describe("listModels — GET /models (#320)", () => {
+  it("returns the live catalog (providers + reasoningEfforts)", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const res = await app.request("/models");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { providers: unknown[]; reasoningEfforts: string[] };
+    expect(body.providers).toHaveLength(1);
+    expect(body.reasoningEfforts).toEqual(["none", "minimal", "low", "medium", "high", "xhigh"]);
+    expect(stub.catalogCalls.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes op=listModels to the authz hook (no skillId)", async () => {
+    const stub = makeStub();
+    const authz = vi.fn(() => true);
+    const app = makeBff(stub, { authz });
+    await app.request("/models");
+    expect(authz).toHaveBeenCalledWith({ op: "listModels", tenantId: TENANT });
+  });
+
+  it("is denied (403) by the fail-closed default when no authz hook is configured", async () => {
+    const stub = makeStub();
+    const app = createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      apiKey: "skb_k",
+      tenantId: TENANT,
+      client: stub.client,
+      // no authz, no allowUnauthenticated → fail closed
+    });
+    const res = await app.request("/models");
+    expect(res.status).toBe(403);
+    expect(stub.catalogCalls.list).not.toHaveBeenCalled();
+  });
+
+  it("maps an SDK error (e.g. 401 apiKey-only) to the contract error envelope", async () => {
+    const stub = makeStub({
+      catalogList: async () => {
+        throw new BaoBoxError(401, "unauthorized", "admin secret required for catalog", "req_c1", null);
+      },
+    });
+    const app = makeBff(stub);
+    const res = await app.request("/models");
+    // 401 maps to upstream_error (no contract code for 401)
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("upstream_error");
+  });
+
+  it("audits the allowed outcome", async () => {
+    const records: AuditRecord[] = [];
+    const stub = makeStub();
+    const app = makeBff(stub, { audit: (r) => void records.push(r) });
+    await app.request("/models");
+    expect(records).toContainEqual(
+      expect.objectContaining({ op: "listModels", tenantId: TENANT, outcome: "allowed" }),
+    );
+  });
+
+  it("returns providers and reasoningEfforts at the top level (not wrapped in data)", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const body = (await (await app.request("/models")).json()) as Record<string, unknown>;
+    // The catalog is NOT wrapped in { data: ... } — it is a flat { providers, reasoningEfforts }
+    expect(body).toHaveProperty("providers");
+    expect(body).toHaveProperty("reasoningEfforts");
+    expect(body).not.toHaveProperty("data");
   });
 });

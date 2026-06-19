@@ -43,6 +43,8 @@ function mockApi(over: Partial<SkillStudioApi> = {}): SkillStudioApi {
     getParameters: vi.fn(async () => []),
     setParameters: vi.fn(async (_id, params) => params),
     listAvailableTools: vi.fn(async () => { throw new Error("not supported"); }),
+    // #320 — default to rejecting so the picker falls back to the static catalog.
+    listModels: vi.fn(async () => { throw new Error("not supported"); }),
     ...over,
   };
 }

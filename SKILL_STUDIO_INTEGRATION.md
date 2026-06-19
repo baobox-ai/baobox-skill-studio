@@ -27,17 +27,18 @@ Your backend:  @baobox/skill-builder-bff  ──(apiKey, tenant-scoped)──▶
 
 | Package | Version | Where it runs | Role |
 | ------- | ------- | ------------- | ---- |
-| [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.16.0` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257) |
-| [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.3.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
-| [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.4.0` | your backend | mountable Hono BFF router |
-| [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.3.0` | browser | `<baobox-skill-builder>` Web Component |
+| [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.18.0` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257 + model catalog #320) |
+| [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.4.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
+| [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.5.0` | your backend | mountable Hono BFF router |
+| [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.4.0` | browser | `<baobox-skill-builder>` Web Component |
 
 These four versions are a **compatibility set** — install them together. The
-contract is the pinned interface between the BFF (`^0.4.0`) and the Web Component
-(`^0.3.0`); both depend on `@baobox/skill-builder-contract@^0.3.0`, and the BFF
-additionally needs `@baobox/sdk@^0.16.0` (the SDK that speaks the #257 authoring
-routes). Mixing a `0.3.x` web bundle with a `0.2.x` BFF loses the `listAvailableTools`
-endpoint (404 → the Web Component falls back to attach-by-id) — keep the set aligned.
+contract is the pinned interface between the BFF (`^0.5.0`) and the Web Component
+(`^0.4.0`); both depend on `@baobox/skill-builder-contract@^0.4.0`, and the BFF
+additionally needs `@baobox/sdk@^0.18.0` (the SDK that adds `client.catalog.list()`
+for the live model catalog #320). Mixing a `0.4.x` web bundle with a `0.4.x` BFF
+loses the `listModels` endpoint (404 → the Web Component falls back to the static
+catalog) — keep the set aligned.
 
 > Phase 2 is **additive**: the Phase-1 endpoints keep their exact method+path, so
 > an existing Phase-1 integration keeps working after the upgrade — you opt into
@@ -156,7 +157,7 @@ contract-shaped response.**
 
 The op set (`SkillStudioOp`) the `authz`/`audit` hooks see:
 
-- **reads** — `list`, `get`, `listAttachedSkills`, `listTools`, `listAvailableTools`, `getParameters`
+- **reads** — `list`, `get`, `listAttachedSkills`, `listTools`, `listAvailableTools`, `getParameters`, `listModels`
 - **mutations** — `create`, `update` (Phase-1 PATCH), `updateStructural`
   (Phase-2 PUT), `attachSkill`, `detachSkill`, `attachTool`, `detachTool`,
   `setParameters`
@@ -377,6 +378,42 @@ list to populate the tool-picker `<select>` (excluding already-attached tools),
 falling back to attach-by-id free-text input if the call fails (e.g. the BFF
 is on an older version without this endpoint). The server allowlist remains the
 authority in both modes — `tool_not_allowed` is still surfaced on a bad attach.
+
+#### `GET /models` → `{ providers, reasoningEfforts }` *(#320)*
+
+Returns the live LLM model catalog — all providers and models BaoBox knows
+about. The Web Component uses this to populate the model picker `<datalist>`
+with the current server-side catalog, replacing the static fallback list.
+
+**ADMIN_SECRET-gated**: the BFF calls `client.catalog.list()` on the SDK,
+which requires an `adminSecret` credential. An `apiKey`-only BFF receives 401
+and returns `upstream_error`; the Web Component falls back to the static
+built-in catalog transparently. The catalog carries **no secrets** — it is
+safe to return as-is to the browser.
+
+```jsonc
+{
+  "providers": [
+    {
+      "id": "openai",
+      "displayName": "OpenAI",
+      "defaultModel": "openai/gpt-5",
+      "docsUrl": "https://platform.openai.com/docs",
+      "pricingUrl": "https://openai.com/pricing",
+      "models": [
+        { "id": "openai/gpt-5", "displayName": "GPT-5", "paramProfile": "reasoning",
+          "reasoningEfforts": ["minimal","low","medium","high"], "contextWindow": 128000 },
+        { "id": "openai/gpt-4o", "displayName": "GPT-4o", "paramProfile": "sampling" }
+      ]
+    }
+  ],
+  "reasoningEfforts": ["none","minimal","low","medium","high","xhigh"]
+}
+```
+
+The `authz` hook sees `op="listModels"` with no `skillId` (catalog is
+non-tenant). The response shape mirrors the SDK `LlmCatalog` type (also
+declared in `@baobox/skill-builder-contract` as `ModelCatalogResponse`).
 
 #### `POST /skills/:id/tools` → `{ data: { attached: true } }`
 
@@ -644,7 +681,8 @@ admin's session, so treat the bundle as code you ship. Required controls:
 
 > `apiKey` mode requires `@baobox/sdk` >= 0.16.0 and a BaoBox server with #257
 > worker support (the tenant key carrying `skills:*` grants + the `tool:<id>`
-> allowlist).
+> allowlist). The live model catalog (`GET /models`, #320) additionally requires
+> `@baobox/sdk` >= 0.18.0 and an `adminSecret` credential on the BFF.
 
 ### How the BFF authenticates the user
 

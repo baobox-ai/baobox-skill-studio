@@ -208,4 +208,42 @@ describe("createApi — Phase 2 authoring", () => {
     expect(seen.method).toBe("GET");
     expect(tools).toEqual([{ id: "tl_1", name: "Web Search", description: "searches the web" }]);
   });
+
+  it("listModels GETs {base}/models and returns the catalog (#320)", async () => {
+    const seen: { url?: string; method?: string } = {};
+    const catalog = {
+      providers: [
+        {
+          id: "openai",
+          displayName: "OpenAI",
+          defaultModel: "openai/gpt-5",
+          docsUrl: "https://platform.openai.com/docs",
+          pricingUrl: "https://openai.com/pricing",
+          models: [{ id: "openai/gpt-5", displayName: "GPT-5", paramProfile: "reasoning", reasoningEfforts: ["minimal", "low", "medium", "high"] }],
+        },
+      ],
+      reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    };
+    const api = createApi(
+      "/bff",
+      fakeFetch((url, init) => {
+        seen.url = url;
+        seen.method = init.method;
+        return json(200, catalog);
+      }),
+    );
+    const result = await api.listModels();
+    expect(seen.url).toBe("/bff/models");
+    expect(seen.method).toBe("GET");
+    expect(result.providers).toHaveLength(1);
+    expect(result.reasoningEfforts).toEqual(["none", "minimal", "low", "medium", "high", "xhigh"]);
+  });
+
+  it("listModels throws SkillStudioApiError on non-2xx (e.g. 401 from apiKey-only BFF)", async () => {
+    const api = createApi(
+      "/bff",
+      fakeFetch(() => json(401, { error: { code: "upstream_error", message: "admin secret required" } })),
+    );
+    await expect(api.listModels()).rejects.toMatchObject({ status: 401, code: "upstream_error" });
+  });
 });

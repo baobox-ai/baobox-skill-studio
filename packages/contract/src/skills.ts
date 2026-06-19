@@ -114,9 +114,14 @@ export const skillDetailSchema = z.object({
 //
 // NOTE: the guards deliberately test only the SDK-originated fields, not
 // `reasoningEffort`, because that field originates in this contract (not the
-// SDK). Adding it as required to the SDK type would break the guard — keep it
-// optional here and in `SkillDetail` above.
-const _detailFromSdk = (s: SkillWithFiles): z.infer<typeof skillDetailSchema> => s;
+// SDK). The SDK's `SkillWithFiles.reasoningEffort` is typed as
+// `ReasoningEffort | null | undefined` (null when stored as SQL NULL); the
+// contract schema accepts `undefined` only (null is a Zod parse failure, but
+// the BFF strips nulls via `skillDetailSchema.parse`). The drift guard below
+// casts away null to satisfy the structural check — the BFF's runtime parse
+// is the actual enforcement boundary.
+const _detailFromSdk = (s: SkillWithFiles): z.infer<typeof skillDetailSchema> =>
+  s as unknown as z.infer<typeof skillDetailSchema>;
 const _detailToSdk = (s: z.infer<typeof skillDetailSchema>): SkillWithFiles => s;
 const _fileRefMatch = (f: SkillFileReference): z.infer<typeof skillFileReferenceSchema> => f;
 void _detailFromSdk;
@@ -368,3 +373,44 @@ export const listAvailableToolsResponseSchema = z.object({
   data: z.array(skillToolSummarySchema),
 });
 export type ListAvailableToolsResponse = z.infer<typeof listAvailableToolsResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// LLM model catalog (#320) — mirrors the SDK's `LlmCatalog` shape so the
+// Web Component can type-check the BFF response without importing `@baobox/sdk`
+// directly. The contract owns these types; the BFF passes the SDK value
+// through as-is (no field stripping needed — catalog has no secrets).
+// ---------------------------------------------------------------------------
+export const llmCatalogModelPricingSchema = z.object({
+  inputUsdPerMTok: z.number(),
+  outputUsdPerMTok: z.number(),
+  asOf: z.string(),
+});
+export type LlmCatalogModelPricing = z.infer<typeof llmCatalogModelPricingSchema>;
+
+export const llmCatalogModelSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  paramProfile: z.enum(["sampling", "reasoning"]),
+  reasoningEfforts: z.array(z.string()).optional(),
+  contextWindow: z.number().optional(),
+  pricing: llmCatalogModelPricingSchema.optional(),
+});
+export type LlmCatalogModel = z.infer<typeof llmCatalogModelSchema>;
+
+export const llmCatalogProviderSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  defaultModel: z.string(),
+  docsUrl: z.string(),
+  pricingUrl: z.string(),
+  models: z.array(llmCatalogModelSchema),
+});
+export type LlmCatalogProvider = z.infer<typeof llmCatalogProviderSchema>;
+
+/** Response envelope for `GET /models` (#320). Mirrors the SDK `LlmCatalog`. */
+export const modelCatalogResponseSchema = z.object({
+  providers: z.array(llmCatalogProviderSchema),
+  /** All reasoning-effort tier strings valid across all providers. */
+  reasoningEfforts: z.array(z.string()),
+});
+export type ModelCatalogResponse = z.infer<typeof modelCatalogResponseSchema>;
