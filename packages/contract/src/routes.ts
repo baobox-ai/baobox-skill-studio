@@ -104,6 +104,13 @@ export const skillStudioRoutes = {
     method: "GET",
     path: "/tools",
   },
+  // #320 — live LLM model catalog. Path `/models` is distinct from all skill
+  // and tool paths. The BFF calls `client.catalog.list()` (ADMIN_SECRET-gated);
+  // an apiKey-only BFF gets 401 and the web falls back to the static catalog.
+  listModels: {
+    method: "GET",
+    path: "/models",
+  },
 } as const;
 
 export type SkillStudioRoutes = typeof skillStudioRoutes;

@@ -6,6 +6,7 @@ import {
   type SkillParameter,
   type SkillSummary,
   type SkillToolSummary,
+  type SkillWithFiles,
   attachSubSkillRequestSchema,
   attachToolRequestSchema,
   setSkillParametersRequestSchema,
@@ -276,12 +277,25 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
     );
   }
 
-  // Apply the host's source-of-truth detail decorator (if any) before responding.
-  async function decorateDetail(detail: SkillDetail, skillId: string): Promise<SkillDetail> {
-    if (hooks.sourceOfTruth?.detail) {
-      return hooks.sourceOfTruth.detail(detail, { tenantId, skillId });
+  // SDK 0.18.0 typed `SkillWithFiles.reasoningEffort` as `ReasoningEffort | null |
+  // undefined` (SQL NULL from the database). The contract's `SkillDetail` only
+  // accepts `undefined` (the schema strips the field when absent). Normalize
+  // `null` → `undefined` so downstream contract consumers never see null.
+  function normalizeSkillDetail(s: SkillWithFiles): SkillDetail {
+    if (s.reasoningEffort === null) {
+      const { reasoningEffort: _dropped, ...rest } = s as SkillWithFiles & { reasoningEffort: null };
+      return rest as SkillDetail;
     }
-    return detail;
+    return s as SkillDetail;
+  }
+
+  // Apply the host's source-of-truth detail decorator (if any) before responding.
+  async function decorateDetail(detail: SkillWithFiles, skillId: string): Promise<SkillDetail> {
+    const normalized = normalizeSkillDetail(detail);
+    if (hooks.sourceOfTruth?.detail) {
+      return hooks.sourceOfTruth.detail(normalized, { tenantId, skillId });
+    }
+    return normalized;
   }
 
   const app = new Hono();
@@ -330,12 +344,13 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
         return validationError(c, "update", id, parsed.error.issues[0]?.message);
       }
       const updatedField = Object.keys(parsed.data)[0];
-      const before = hooks.onMutation ? await client.skills.get(id, { tenantId }) : undefined;
+      const beforeRaw = hooks.onMutation ? await client.skills.get(id, { tenantId }) : undefined;
+      const before = beforeRaw ? normalizeSkillDetail(beforeRaw) : undefined;
       // SDK `update` returns a Skill (no files); the contract's PATCH returns a
       // full SkillDetail, so re-fetch the detail after writing. Both calls are
       // tenant-scoped, so a cross-tenant skill 404s on the write itself.
       await client.skills.update(id, parsed.data, { tenantId });
-      const after = await client.skills.get(id, { tenantId });
+      const after = normalizeSkillDetail(await client.skills.get(id, { tenantId }));
       await notifyMutation({ op: "update", tenantId, skillId: id, before, after });
       await audit({
         op: "update",
@@ -365,7 +380,7 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
       }
       // apiKey client → tenant-owned; the `{ tenantId }` scope is belt-and-braces.
       const created = await client.skills.create(parsed.data, { tenantId });
-      const after = await client.skills.get(created.id, { tenantId });
+      const after = normalizeSkillDetail(await client.skills.get(created.id, { tenantId }));
       await notifyMutation({ op: "create", tenantId, skillId: created.id, after });
       await audit({ op: "create", tenantId, skillId: created.id, outcome: "allowed" });
       return c.json({ data: await decorateDetail(after, created.id) }, 201);
@@ -385,12 +400,13 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
         return validationError(c, "updateStructural", id, parsed.error.issues[0]?.message);
       }
       const updatedFields = Object.keys(parsed.data);
-      const before = hooks.onMutation ? await client.skills.get(id, { tenantId }) : undefined;
+      const beforeRawSU = hooks.onMutation ? await client.skills.get(id, { tenantId }) : undefined;
+      const beforeSU = beforeRawSU ? normalizeSkillDetail(beforeRawSU) : undefined;
       await client.skills.update(id, parsed.data, { tenantId });
-      const after = await client.skills.get(id, { tenantId });
-      await notifyMutation({ op: "updateStructural", tenantId, skillId: id, before, after });
+      const afterSU = normalizeSkillDetail(await client.skills.get(id, { tenantId }));
+      await notifyMutation({ op: "updateStructural", tenantId, skillId: id, before: beforeSU, after: afterSU });
       await audit({ op: "updateStructural", tenantId, skillId: id, outcome: "allowed", updatedFields });
-      return c.json({ data: await decorateDetail(after, id) });
+      return c.json({ data: await decorateDetail(afterSU, id) });
     } catch (err) {
       return respondError(c, err, "updateStructural", { skillId: id });
     }
@@ -487,6 +503,23 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
       return c.json({ data: summaries });
     } catch (err) {
       return respondError(c, err, "listAvailableTools");
+    }
+  });
+
+  // GET /models → { providers, reasoningEfforts } (#320)
+  // Returns the live LLM model catalog from `client.catalog.list()`.
+  // ADMIN_SECRET-gated: an apiKey-only BFF will get a 401 from the SDK, which
+  // propagates as an upstream_error → the web falls back to the static catalog.
+  // The catalog carries no secrets, so the response is returned as-is.
+  // The `authz` hook sees op="listModels" with no skillId (not tenant-scoped).
+  app.get("/models", async (c) => {
+    try {
+      await authorize("listModels");
+      const catalog = await client.catalog.list();
+      await audit({ op: "listModels", tenantId, outcome: "allowed" });
+      return c.json({ providers: catalog.providers, reasoningEfforts: catalog.reasoningEfforts });
+    } catch (err) {
+      return respondError(c, err, "listModels");
     }
   });
 

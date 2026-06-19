@@ -6,6 +6,7 @@ import {
   attachToolRequestSchema,
   contractErrorSchema,
   listSkillsResponseSchema,
+  modelCatalogResponseSchema,
   reasoningEffortSchema,
   setSkillParametersRequestSchema,
   skillCreateRequestSchema,
@@ -279,6 +280,108 @@ describe("per-tenant parameters", () => {
       ],
     });
     expect(r.success).toBe(true);
+  });
+});
+
+// ===========================================================================
+// #312 — Phase 3: listAvailableTools route
+// ===========================================================================
+
+describe("listAvailableTools route (#312)", () => {
+  it("exposes GET /tools in the route table", () => {
+    expect(skillStudioRoutes.listAvailableTools).toEqual({ method: "GET", path: "/tools" });
+  });
+});
+
+// ===========================================================================
+// #320 — Live LLM model catalog
+// ===========================================================================
+
+describe("REASONING_EFFORT_VALUES drift-guard (#320)", () => {
+  // mirror of backend REASONING_EFFORTS — keep in sync;
+  // this test fails if the contract tuple drifts from the backend master list.
+  const BACKEND_MASTER_TUPLE = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+
+  it("contract REASONING_EFFORT_VALUES equals the backend master tuple", () => {
+    expect(Array.from(REASONING_EFFORT_VALUES)).toEqual(Array.from(BACKEND_MASTER_TUPLE));
+  });
+});
+
+describe("listModels route (#320)", () => {
+  it("exposes GET /models in the route table", () => {
+    expect(skillStudioRoutes.listModels).toEqual({ method: "GET", path: "/models" });
+  });
+});
+
+describe("modelCatalogResponseSchema (#320)", () => {
+  it("accepts a well-formed catalog response", () => {
+    const catalog = {
+      providers: [
+        {
+          id: "openai",
+          displayName: "OpenAI",
+          defaultModel: "openai/gpt-5",
+          docsUrl: "https://platform.openai.com/docs",
+          pricingUrl: "https://openai.com/pricing",
+          models: [
+            {
+              id: "openai/gpt-5",
+              displayName: "GPT-5",
+              paramProfile: "reasoning",
+              reasoningEfforts: ["minimal", "low", "medium", "high"],
+              contextWindow: 128000,
+            },
+            {
+              id: "openai/gpt-4o",
+              displayName: "GPT-4o",
+              paramProfile: "sampling",
+            },
+          ],
+        },
+      ],
+      reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    };
+    const r = modelCatalogResponseSchema.safeParse(catalog);
+    expect(r.success).toBe(true);
+  });
+
+  it("accepts an empty providers list", () => {
+    const r = modelCatalogResponseSchema.safeParse({ providers: [], reasoningEfforts: [] });
+    expect(r.success).toBe(true);
+  });
+
+  it("accepts a model without optional fields (contextWindow, pricing, reasoningEfforts)", () => {
+    const r = modelCatalogResponseSchema.safeParse({
+      providers: [
+        {
+          id: "minimax",
+          displayName: "MiniMax",
+          defaultModel: "minimax/MiniMax-M2.7",
+          docsUrl: "https://docs.minimax.io",
+          pricingUrl: "https://minimax.io/pricing",
+          models: [{ id: "minimax/MiniMax-M2.7", displayName: "MiniMax M2.7", paramProfile: "sampling" }],
+        },
+      ],
+      reasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects an invalid paramProfile", () => {
+    const r = modelCatalogResponseSchema.safeParse({
+      providers: [
+        {
+          id: "x",
+          displayName: "X",
+          defaultModel: "x/m",
+          docsUrl: "https://x.example",
+          pricingUrl: "https://x.example/pricing",
+          models: [{ id: "x/m", displayName: "M", paramProfile: "unknown" }],
+        },
+      ],
+      reasoningEfforts: [],
+    });
+    expect(r.success).toBe(false);
   });
 });
 

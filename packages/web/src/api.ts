@@ -5,6 +5,7 @@ import {
   type ListAvailableToolsResponse,
   type ListSkillsResponse,
   type ListSkillToolsResponse,
+  type ModelCatalogResponse,
   type SkillCreateRequest,
   type SkillDetail as ContractSkillDetail,
   type SkillDetailResponse,
@@ -17,6 +18,7 @@ import {
 } from "@baobox/skill-builder-contract";
 
 export type {
+  ModelCatalogResponse,
   SkillCreateRequest,
   SkillParameter,
   SkillStructuralUpdateRequest,
@@ -74,6 +76,13 @@ export interface SkillStudioApi {
   // Phase 3 — available tool picker (#312).
   /** Return the tenant's attachable tool allowlist (own + global). */
   listAvailableTools(): Promise<SkillToolSummary[]>;
+  // #320 — live LLM model catalog.
+  /**
+   * Fetch the live LLM model catalog from the BFF (`GET /models`).
+   * ADMIN_SECRET-gated on the BFF side — an apiKey-only BFF returns an error,
+   * in which case the caller should fall back to the static catalog.
+   */
+  listModels(): Promise<ModelCatalogResponse>;
 }
 
 type FetchFn = typeof globalThis.fetch;
@@ -224,6 +233,12 @@ export function createApi(apiBase: string, fetchImpl?: FetchFn): SkillStudioApi 
         skillStudioRoutes.listAvailableTools.path,
       );
       return body.data;
+    },
+    async listModels() {
+      return request<ModelCatalogResponse>(
+        skillStudioRoutes.listModels.method,
+        skillStudioRoutes.listModels.path,
+      );
     },
   };
 }

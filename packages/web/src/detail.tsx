@@ -7,7 +7,14 @@ import type {
   SkillSummary,
   SkillToolSummary,
 } from "./api.js";
-import { type ModelFamily, MODEL_CATALOG, getModelFamily, getReasoningEfforts } from "./modelCatalog.js";
+import {
+  type CatalogProvider,
+  type ModelFamily,
+  MODEL_CATALOG,
+  fetchModelCatalog,
+  getModelFamily,
+  getReasoningEfforts,
+} from "./modelCatalog.js";
 import type { Palette } from "./theme.js";
 import {
   cardStyle,
@@ -198,11 +205,14 @@ function ModelPicker({
   onChange,
   palette: p,
   disabled,
+  catalog,
 }: {
   value: string;
   onChange: (v: string) => void;
   palette: Palette;
   disabled?: boolean;
+  /** Active model catalog — live from BFF when available, static fallback otherwise. */
+  catalog: CatalogProvider[];
 }) {
   return (
     <>
@@ -219,7 +229,7 @@ function ModelPicker({
         autoComplete="off"
       />
       <datalist id={MODEL_DATALIST_ID}>
-        {MODEL_CATALOG.map((provider) => (
+        {catalog.map((provider) => (
           <optgroup key={provider.id} label={provider.label}>
             {provider.models.map((m) => (
               <option key={m.id} value={m.id}>
@@ -262,6 +272,7 @@ function ModelParamPanel({
   onReasoningEffort,
   palette: p,
   disabled,
+  catalog,
 }: {
   model: string;
   modelFamily: ModelFamily | undefined;
@@ -273,10 +284,12 @@ function ModelParamPanel({
   onReasoningEffort: (v: string) => void;
   palette: Palette;
   disabled?: boolean;
+  /** Active model catalog — live from BFF when available, static fallback otherwise. */
+  catalog: CatalogProvider[];
 }) {
   if (modelFamily === "reasoning") {
     // Per-model valid set; falls back to full set for unknown free-text models.
-    const effortOptions = getReasoningEfforts(model) ?? ["minimal", "low", "medium", "high"];
+    const effortOptions = getReasoningEfforts(model, catalog) ?? ["minimal", "low", "medium", "high"];
     return (
       <div style={{ flex: 2 }}>
         <label style={labelStyle()} for="bb-effort">
@@ -361,13 +374,24 @@ function EditableSkill({
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // #320 — live model catalog. Load once per api instance; use the static
+  // MODEL_CATALOG as the initial value so the picker is immediately usable
+  // while the fetch resolves. On failure the static catalog remains active.
+  const [catalog, setCatalog] = useState<CatalogProvider[]>(MODEL_CATALOG);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load once per api instance
+  useEffect(() => {
+    fetchModelCatalog(api).then((live) => {
+      if (live) setCatalog(live);
+    });
+  }, [api]);
+
   function set<K extends keyof EditDraft>(key: K, value: string) {
     setDraft((d) => ({ ...d, [key]: value }));
     setSaved(false);
   }
 
   // Derive the model family for the current draft model — drives param panel.
-  const modelFamily = getModelFamily(draft.model);
+  const modelFamily = getModelFamily(draft.model, catalog);
 
   // Validate the numeric fields against the contract's bounds before they can be
   // marked dirty / submitted (temperature 0–2; maxTokens a positive integer).
@@ -487,6 +511,7 @@ function EditableSkill({
             onChange={(v) => set("model", v)}
             palette={p}
             disabled={saving}
+            catalog={catalog}
           />
         </div>
         <ModelParamPanel
@@ -500,6 +525,7 @@ function EditableSkill({
           onReasoningEffort={(v) => set("reasoningEffort", v)}
           palette={p}
           disabled={saving}
+          catalog={catalog}
         />
       </div>
 

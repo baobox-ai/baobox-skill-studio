@@ -14,7 +14,8 @@ export type SkillStudioReadOp =
   | "listAttachedSkills"
   | "listTools"
   | "listAvailableTools"
-  | "getParameters";
+  | "getParameters"
+  | "listModels"; // #320 — live LLM model catalog via GET /models
 
 /**
  * Structural mutations. Each one funnels through `authz` (before the write) and,

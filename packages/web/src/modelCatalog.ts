@@ -1,16 +1,16 @@
 // ---------------------------------------------------------------------------
-// Static model catalog for the Skill Studio model picker (#302).
+// Model catalog for the Skill Studio model picker (#302 / #320).
 //
-// Decision: Skill Studio uses a STATIC catalog rather than calling the BaoBox
-// backend's `/tenant-session/llm-providers` or `/llm-integrations/:id/models`
-// endpoint. Reasons:
-//   1. The BFF surface is the tenant's own BFF (not BaoBox directly), and the
-//      BFF currently exposes only the `skills.*` surface (#246 contract).
-//   2. Adding a live-catalog endpoint would require BFF changes (out of scope
-//      for #302) and a BaoBox admin-secret call from the browser's BFF.
-//   3. The catalog is small and changes infrequently; a static list is the
-//      right trade-off for a walking skeleton. A future ticket can replace this
-//      with a catalog endpoint once the BFF surface is widened.
+// #320: The PREFERRED source is the live catalog fetched from the BFF via
+// `GET /models` (`listModels` action). The BFF calls `client.catalog.list()`
+// on the SDK (ADMIN_SECRET-gated). Use `fetchModelCatalog(api)` to load it
+// at runtime and pass the result to `getModelFamily` / `getReasoningEfforts`.
+//
+// The STATIC `MODEL_CATALOG` below is the OFFLINE / DEV FALLBACK — used when
+// the live fetch fails (e.g. the BFF uses an apiKey without adminSecret) or
+// has not yet resolved. It is clearly marked and must not be used as the
+// primary source once the live catalog is available.
+// live catalog comes from the BFF `listModels` action (#320).
 //
 // The `family` field drives the parameter panel:
 //   - "reasoning" → show `reasoningEffort` selector, hide temperature/maxTokens
@@ -23,6 +23,7 @@
 //   - sampling models: no reasoning effort
 // ---------------------------------------------------------------------------
 
+import type { ModelCatalogResponse } from "./api.js";
 import type { ReasoningEffort } from "@baobox/skill-builder-contract";
 
 export type ModelFamily = "reasoning" | "sampling";
@@ -54,6 +55,11 @@ const GPT5_EFFORTS: ReasoningEffort[] = ["minimal", "low", "medium", "high"];
 /** Effort set for gpt-5.4 / gpt-5.5 (drops "minimal", adds "none" + "xhigh"). */
 const GPT54_EFFORTS: ReasoningEffort[] = ["none", "low", "medium", "high", "xhigh"];
 
+/**
+ * OFFLINE / DEV FALLBACK — used when the live BFF catalog fetch fails or
+ * has not yet resolved. The live catalog comes from the BFF `listModels`
+ * action (#320). Prefer `fetchModelCatalog(api)` in production.
+ */
 export const MODEL_CATALOG: CatalogProvider[] = [
   {
     id: "minimax",
@@ -94,9 +100,49 @@ export const CATALOG_MODEL_IDS = new Set<string>(
   MODEL_CATALOG.flatMap((p) => p.models.map((m) => m.id)),
 );
 
+/**
+ * Project a live `ModelCatalogResponse` (from the BFF `listModels` action)
+ * into the local `CatalogProvider[]` shape used by the picker helpers.
+ * The live catalog uses `paramProfile: "sampling" | "reasoning"` — same
+ * vocabulary as the local `ModelFamily` type.
+ */
+function liveToLocal(live: ModelCatalogResponse): CatalogProvider[] {
+  return live.providers.map((p: ModelCatalogResponse["providers"][number]) => ({
+    id: p.id,
+    label: p.displayName,
+    models: p.models.map((m: ModelCatalogResponse["providers"][number]["models"][number]) => ({
+      id: m.id,
+      label: m.displayName,
+      family: m.paramProfile as ModelFamily,
+      reasoningEfforts: m.reasoningEfforts as ReasoningEffort[] | undefined,
+    })),
+  }));
+}
+
+/**
+ * Fetch the live LLM model catalog from the BFF (`GET /models`, #320).
+ * Returns the projected `CatalogProvider[]` on success, or `null` when the
+ * BFF returns an error (e.g. apiKey-only BFF that lacks adminSecret access).
+ * The caller should fall back to `MODEL_CATALOG` when this returns null.
+ */
+export async function fetchModelCatalog(
+  api: { listModels(): Promise<ModelCatalogResponse> },
+): Promise<CatalogProvider[] | null> {
+  try {
+    const live = await api.listModels();
+    const projected = liveToLocal(live);
+    return projected.length > 0 ? projected : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Look up a model's family. Returns undefined when the model is not in the catalog (free-text entry). */
-export function getModelFamily(modelId: string): ModelFamily | undefined {
-  for (const provider of MODEL_CATALOG) {
+export function getModelFamily(
+  modelId: string,
+  catalog: CatalogProvider[] = MODEL_CATALOG,
+): ModelFamily | undefined {
+  for (const provider of catalog) {
     const found = provider.models.find((m) => m.id === modelId);
     if (found) return found.family;
   }
@@ -110,8 +156,11 @@ export function getModelFamily(modelId: string): ModelFamily | undefined {
  * - Known sampling model → undefined (no effort selector shown).
  * - Unknown / free-text model → the full REASONING_EFFORT_VALUES set (best-effort fallback).
  */
-export function getReasoningEfforts(modelId: string): ReasoningEffort[] | undefined {
-  for (const provider of MODEL_CATALOG) {
+export function getReasoningEfforts(
+  modelId: string,
+  catalog: CatalogProvider[] = MODEL_CATALOG,
+): ReasoningEffort[] | undefined {
+  for (const provider of catalog) {
     const found = provider.models.find((m) => m.id === modelId);
     if (!found) continue;
     if (found.family === "sampling") return undefined;
@@ -123,6 +172,6 @@ export function getReasoningEfforts(modelId: string): ReasoningEffort[] | undefi
 }
 
 /** Flat list of `"Provider / Label"` strings for datalist option labels. */
-export function catalogOptionLabels(): string[] {
-  return MODEL_CATALOG.flatMap((p) => p.models.map((m) => `${p.label} / ${m.label} (${m.id})`));
+export function catalogOptionLabels(catalog: CatalogProvider[] = MODEL_CATALOG): string[] {
+  return catalog.flatMap((p) => p.models.map((m) => `${p.label} / ${m.label} (${m.id})`));
 }
