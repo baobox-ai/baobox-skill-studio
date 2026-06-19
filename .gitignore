@@ -5,3 +5,7 @@ dist
 .env
 .env.*
 coverage
+
+# Local agent tooling — never commit
+.claude/
+.omc/
