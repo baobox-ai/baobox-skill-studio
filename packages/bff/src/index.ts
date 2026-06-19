@@ -465,6 +465,31 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
     }
   });
 
+  // GET /tools → { data: SkillToolSummary[] }
+  // Returns the tenant's ATTACHABLE tool allowlist (own + global tools visible
+  // to this tenant's credential). DISTINCT from GET /skills/:id/tools, which
+  // returns tools already attached to a specific skill. The `authz` hook sees
+  // op="listAvailableTools" with no skillId — the allowlist is tenant-level.
+  // SECURITY: same projection as listTools — handlerConfig / inputSchema are
+  // dropped; neither carries a skillId to the authz hook (not scoped to a skill).
+  app.get("/tools", async (c) => {
+    try {
+      await authorize("listAvailableTools");
+      const tools = await client.tools.list();
+      // SECURITY: project to the lean summary — NEVER ship `handlerConfig` /
+      // `inputSchema` (which may carry callback secrets) to the browser.
+      const summaries: SkillToolSummary[] = tools.map((t) => ({
+        id: t.id,
+        name: t.name,
+        description: t.description,
+      }));
+      await audit({ op: "listAvailableTools", tenantId, outcome: "allowed" });
+      return c.json({ data: summaries });
+    } catch (err) {
+      return respondError(c, err, "listAvailableTools");
+    }
+  });
+
   // POST /skills/:id/tools (body: { toolId }) → { data: { attached } }
   app.post("/skills/:id/tools", async (c) => {
     const id = c.req.param("id");

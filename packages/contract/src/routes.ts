@@ -96,6 +96,14 @@ export const skillStudioRoutes = {
     path: "/skills/:id/parameters",
     build: (id: string): string => `/skills/${enc(id)}/parameters`,
   },
+  // Phase 3 — tenant tool allowlist enumeration (own + global tools the tenant
+  // may attach). Distinct from `listSkillTools` (attached tools for a skill).
+  // Path is `/tools` — does NOT include `/skills/:id` — because it is not
+  // scoped to a particular skill.
+  listAvailableTools: {
+    method: "GET",
+    path: "/tools",
+  },
 } as const;
 
 export type SkillStudioRoutes = typeof skillStudioRoutes;

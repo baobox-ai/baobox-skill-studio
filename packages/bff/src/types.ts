@@ -13,6 +13,7 @@ export type SkillStudioReadOp =
   | "get"
   | "listAttachedSkills"
   | "listTools"
+  | "listAvailableTools"
   | "getParameters";
 
 /**

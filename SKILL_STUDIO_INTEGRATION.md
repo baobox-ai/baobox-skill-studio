@@ -28,16 +28,16 @@ Your backend:  @baobox/skill-builder-bff  ──(apiKey, tenant-scoped)──▶
 | Package | Version | Where it runs | Role |
 | ------- | ------- | ------------- | ---- |
 | [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.16.0` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257) |
-| [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.2.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
-| [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.3.0` | your backend | mountable Hono BFF router |
-| [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.2.0` | browser | `<baobox-skill-builder>` Web Component |
+| [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.3.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
+| [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.4.0` | your backend | mountable Hono BFF router |
+| [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.3.0` | browser | `<baobox-skill-builder>` Web Component |
 
 These four versions are a **compatibility set** — install them together. The
-contract is the pinned interface between the BFF (`^0.3.0`) and the Web Component
-(`^0.2.0`); both depend on `@baobox/skill-builder-contract@^0.2.0`, and the BFF
+contract is the pinned interface between the BFF (`^0.4.0`) and the Web Component
+(`^0.3.0`); both depend on `@baobox/skill-builder-contract@^0.3.0`, and the BFF
 additionally needs `@baobox/sdk@^0.16.0` (the SDK that speaks the #257 authoring
-routes). Mixing a `0.2.x` web bundle with a `0.1.x` BFF loses every Phase-2
-endpoint (404s) — keep the set aligned.
+routes). Mixing a `0.3.x` web bundle with a `0.2.x` BFF loses the `listAvailableTools`
+endpoint (404 → the Web Component falls back to attach-by-id) — keep the set aligned.
 
 > Phase 2 is **additive**: the Phase-1 endpoints keep their exact method+path, so
 > an existing Phase-1 integration keeps working after the upgrade — you opt into
@@ -156,7 +156,7 @@ contract-shaped response.**
 
 The op set (`SkillStudioOp`) the `authz`/`audit` hooks see:
 
-- **reads** — `list`, `get`, `listAttachedSkills`, `listTools`, `getParameters`
+- **reads** — `list`, `get`, `listAttachedSkills`, `listTools`, `listAvailableTools`, `getParameters`
 - **mutations** — `create`, `update` (Phase-1 PATCH), `updateStructural`
   (Phase-2 PUT), `attachSkill`, `detachSkill`, `attachTool`, `detachTool`,
   `setParameters`
@@ -355,13 +355,35 @@ secrets); those are dropped server-side and **never reach the browser**.
 { "data": [ { "id": "tool_search", "name": "Web Search", "description": "…" } ] }
 ```
 
+#### `GET /tools` → `{ data: SkillToolSummary[] }` *(Phase 3 — #312)*
+
+Returns the **attachable tool allowlist** for this tenant (own tools + global
+tools visible to the tenant's credential). The response is the same lean
+projection used by `GET /skills/:id/tools` — `{ id, name, description }` —
+`handlerConfig` / `inputSchema` are dropped server-side and never reach the
+browser.
+
+```jsonc
+{ "data": [
+  { "id": "tl_search", "name": "Web Search", "description": "…" },
+  { "id": "tl_calc",   "name": "Calculator",  "description": "…" }
+] }
+```
+
+This endpoint is **distinct** from `GET /skills/:id/tools` (tools already
+attached to a specific skill). The `authz` hook sees `op="listAvailableTools"`
+with no `skillId` — the allowlist is tenant-level. The Web Component uses this
+list to populate the tool-picker `<select>` (excluding already-attached tools),
+falling back to attach-by-id free-text input if the call fails (e.g. the BFF
+is on an older version without this endpoint). The server allowlist remains the
+authority in both modes — `tool_not_allowed` is still surfaced on a bad attach.
+
 #### `POST /skills/:id/tools` → `{ data: { attached: true } }`
 
 Attach a tool by id. The server confines attach to the tenant key's `tool:<id>`
 allowlist; an off-list (or not-visible) tool is rejected with `403
-tool_not_allowed`. There is **no endpoint to enumerate** a tenant's attachable
-tools — the picker is attach-by-id and the server is the authority (see
-[The tool allowlist is server-enforced only](#the-tool-allowlist-is-server-enforced-only)).
+tool_not_allowed`. The `GET /tools` endpoint (above, Phase 3) lets the picker
+offer only the allowlist; the server remains the final authority.
 
 ```jsonc
 // request
@@ -469,16 +491,23 @@ So to use the full authoring UI, a tenant key needs
 `skills:read skills:write skills:create skills:attach skills:tools` plus a
 `tool:<id>` entry for each tool the platform owner permits that tenant to attach.
 
-### The tool allowlist is server-enforced only
+### The tool allowlist — server-enforced, picker-supported
 
-There is **no contract endpoint** to enumerate the tools a tenant *may* attach.
-The allowlist lives on the key (namespace 3 above) and is enforced by the worker:
-an off-list `attachTool` returns `403` → the BFF maps it to `tool_not_allowed` →
-the element surfaces "that tool isn't permitted for your tenant". The element's
-tool picker is therefore **attach-by-id** (the host tells its users which tool ids
-are available out-of-band). A future `listAvailableTools` contract endpoint could
-let the picker offer only the allowlist — until then, do **not** assume the
-browser can discover attachable tools.
+The allowlist lives on the key (namespace 3 above) and is enforced by the
+worker: an off-list `attachTool` returns `403` → the BFF maps it to
+`tool_not_allowed` → the element surfaces "that tool isn't permitted for your
+tenant". This server-side enforcement is the **authority and safety net** in all
+cases.
+
+Phase 3 (#312) adds `GET /tools` (`listAvailableTools`) so the element can
+**proactively** show the tenant's attachable tools in a `<select>` picker
+(excluding already-attached tools). If that call fails (e.g. the BFF is on an
+older version), the element silently falls back to the original attach-by-id
+free-text input — the server guard still fires on every attach attempt.
+
+To use the picker, the tenant key must carry `skills:tools`; the BFF calls
+`client.tools.list()` (SDK `^0.16.0`) which returns tools visible to that key.
+The `authz` hook sees `op="listAvailableTools"` — wire it like any other read op.
 
 ---
 
@@ -669,7 +698,9 @@ Tick all of these to confirm the full authoring integration is live:
   bound to this `tenantId`.
 - **`tool_not_allowed` on a tool you expect** — the tool isn't on the key's
   `tool:<id>` allowlist (or isn't visible to this tenant). The allowlist is
-  managed by the platform owner on the key; there's no endpoint to enumerate it.
+  managed by the platform owner on the key. Use `GET /tools` (`listAvailableTools`)
+  to see what the key currently grants — if a tool you expect is missing from
+  that list, the platform owner needs to add the `tool:<id>` entry to the key.
 - **`cycle_detected` on attach** — the child (transitively) already reaches the
   parent; attaching it would close a loop in the orchestrator graph.
 - **Saving parameters wipes a secret** — your `parameters.set` isn't honoring the

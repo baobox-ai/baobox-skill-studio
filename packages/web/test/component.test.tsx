@@ -21,6 +21,9 @@ const detail: SkillDetail = {
 };
 
 // A complete SkillStudioApi stub — every method present, overridable per test.
+// `listAvailableTools` defaults to rejecting so the tool panel falls back to
+// the free-text attach-by-id input (preserving existing test expectations).
+// Pass `listAvailableTools: vi.fn(async () => [...])` to test the picker path.
 function mockApi(over: Partial<SkillStudioApi> = {}): SkillStudioApi {
   return {
     listSkills: vi.fn(async () => [
@@ -39,6 +42,7 @@ function mockApi(over: Partial<SkillStudioApi> = {}): SkillStudioApi {
     detachTool: vi.fn(async () => {}),
     getParameters: vi.fn(async () => []),
     setParameters: vi.fn(async (_id, params) => params),
+    listAvailableTools: vi.fn(async () => { throw new Error("not supported"); }),
     ...over,
   };
 }

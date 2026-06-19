@@ -61,6 +61,8 @@ interface StubImpl {
   attachTool?: (id: string, t: string, opts?: { tenantId?: string }) => Promise<unknown>;
   detachTool?: (id: string, t: string, opts?: { tenantId?: string }) => Promise<unknown>;
   listTools?: (id: string, opts?: { tenantId?: string }) => Promise<ReturnType<typeof tool>[]>;
+  // top-level tools namespace (not skills-scoped)
+  toolsList?: () => Promise<ReturnType<typeof tool>[]>;
 }
 
 function makeStub(impl: StubImpl = {}) {
@@ -76,9 +78,12 @@ function makeStub(impl: StubImpl = {}) {
     detachTool: vi.fn(impl.detachTool ?? (async () => ({ detached: true }))),
     listTools: vi.fn(impl.listTools ?? (async () => [])),
   };
+  const toolsCalls = {
+    list: vi.fn(impl.toolsList ?? (async () => [])),
+  };
   // biome-ignore lint/suspicious/noExplicitAny: test stub stands in for BaoBoxClient
-  const client = { skills: calls } as any;
-  return { client, calls };
+  const client = { skills: calls, tools: toolsCalls } as any;
+  return { client, calls, toolsCalls };
 }
 
 function makeBff(
@@ -496,5 +501,83 @@ describe("tenant-scope is threaded on every read (#259 review)", () => {
     expect(stub.calls.listAttachedSkills).toHaveBeenCalledWith("sk_1", { tenantId: TENANT });
     expect(stub.calls.listTools).toHaveBeenCalledWith("sk_1", { tenantId: TENANT });
     expect(get).toHaveBeenCalledWith({ tenantId: TENANT, skillId: "sk_1" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /tools — listAvailableTools (#312)
+// ---------------------------------------------------------------------------
+describe("listAvailableTools — GET /tools", () => {
+  it("returns the tenant allowlist projected to {id,name,description}", async () => {
+    const stub = makeStub({ toolsList: async () => [tool("tl_1"), tool("tl_2")] });
+    const app = makeBff(stub);
+    const res = await app.request("/tools");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: Array<Record<string, unknown>> };
+    expect(body.data).toHaveLength(2);
+    expect(body.data[0]).toEqual({ id: "tl_1", name: "Tool tl_1", description: "a tool" });
+    expect(stub.toolsCalls.list).toHaveBeenCalledTimes(1);
+  });
+
+  it("SECURITY: never leaks handlerConfig or inputSchema to the browser", async () => {
+    const stub = makeStub({ toolsList: async () => [tool("tl_sec")] });
+    const app = makeBff(stub);
+    const text = await (await app.request("/tools")).text();
+    expect(text).not.toContain("SUPER-SECRET-CALLBACK");
+    expect(text).not.toContain("handlerConfig");
+    expect(text).not.toContain("inputSchema");
+  });
+
+  it("returns an empty list when the tenant has no tools", async () => {
+    const stub = makeStub({ toolsList: async () => [] });
+    const app = makeBff(stub);
+    const res = await app.request("/tools");
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown).toEqual({ data: [] });
+  });
+
+  it("passes op=listAvailableTools to the authz hook (no skillId)", async () => {
+    const stub = makeStub();
+    const authz = vi.fn(() => true);
+    const app = makeBff(stub, { authz });
+    await app.request("/tools");
+    expect(authz).toHaveBeenCalledWith({ op: "listAvailableTools", tenantId: TENANT });
+  });
+
+  it("is denied (403) by the fail-closed default when no authz hook is configured", async () => {
+    const stub = makeStub({ toolsList: async () => [tool("tl_1")] });
+    const app = createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      apiKey: "skb_k",
+      tenantId: TENANT,
+      client: stub.client,
+      // no authz, no allowUnauthenticated → fail closed
+    });
+    const res = await app.request("/tools");
+    expect(res.status).toBe(403);
+    expect(stub.toolsCalls.list).not.toHaveBeenCalled();
+  });
+
+  it("maps an SDK error to the contract error envelope", async () => {
+    const stub = makeStub({
+      toolsList: async () => {
+        throw new BaoBoxError(403, "forbidden", "key lacks skills:tools grant", "req_t1", null);
+      },
+    });
+    const app = makeBff(stub);
+    const res = await app.request("/tools");
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("forbidden");
+  });
+
+  it("audits the allowed outcome", async () => {
+    const records: AuditRecord[] = [];
+    const stub = makeStub();
+    const app = makeBff(stub, { audit: (r) => void records.push(r) });
+    await app.request("/tools");
+    expect(records).toContainEqual(
+      expect.objectContaining({ op: "listAvailableTools", tenantId: TENANT, outcome: "allowed" }),
+    );
   });
 });

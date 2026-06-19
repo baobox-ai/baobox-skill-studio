@@ -2,6 +2,7 @@ import {
   type AttachAckResponse,
   type DetachAckResponse,
   type ListAttachedSkillsResponse,
+  type ListAvailableToolsResponse,
   type ListSkillsResponse,
   type ListSkillToolsResponse,
   type SkillCreateRequest,
@@ -70,6 +71,9 @@ export interface SkillStudioApi {
   detachTool(id: string, toolId: string): Promise<void>;
   getParameters(id: string): Promise<SkillParameter[]>;
   setParameters(id: string, parameters: SkillParameter[]): Promise<SkillParameter[]>;
+  // Phase 3 — available tool picker (#312).
+  /** Return the tenant's attachable tool allowlist (own + global). */
+  listAvailableTools(): Promise<SkillToolSummary[]>;
 }
 
 type FetchFn = typeof globalThis.fetch;
@@ -211,6 +215,13 @@ export function createApi(apiBase: string, fetchImpl?: FetchFn): SkillStudioApi 
         skillStudioRoutes.setSkillParameters.method,
         skillStudioRoutes.setSkillParameters.build(id),
         { parameters },
+      );
+      return body.data;
+    },
+    async listAvailableTools() {
+      const body = await request<ListAvailableToolsResponse>(
+        skillStudioRoutes.listAvailableTools.method,
+        skillStudioRoutes.listAvailableTools.path,
       );
       return body.data;
     },

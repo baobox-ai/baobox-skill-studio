@@ -356,3 +356,15 @@ export const listSkillToolsResponseSchema = z.object({
   data: z.array(skillToolSummarySchema),
 });
 export type ListSkillToolsResponse = z.infer<typeof listSkillToolsResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// Available tools — the tenant's attachable allowlist (own + global tools).
+// Returned by `GET /tools` (Phase 3 — #312). Reuses `skillToolSummarySchema`
+// (same lean projection: id + name + description; handlerConfig is never sent
+// to the browser). This is DISTINCT from `listSkillTools` (`GET /skills/:id/tools`),
+// which lists tools already attached to a specific skill.
+// ---------------------------------------------------------------------------
+export const listAvailableToolsResponseSchema = z.object({
+  data: z.array(skillToolSummarySchema),
+});
+export type ListAvailableToolsResponse = z.infer<typeof listAvailableToolsResponseSchema>;
