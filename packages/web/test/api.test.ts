@@ -192,4 +192,20 @@ describe("createApi — Phase 2 authoring", () => {
     );
     await expect(api.attachSubSkill("sk_a", "sk_b")).rejects.toMatchObject({ status: 422, code: "cycle_detected" });
   });
+
+  it("listAvailableTools GETs {base}/tools and returns the summaries", async () => {
+    const seen: { url?: string; method?: string } = {};
+    const api = createApi(
+      "/bff",
+      fakeFetch((url, init) => {
+        seen.url = url;
+        seen.method = init.method;
+        return json(200, { data: [{ id: "tl_1", name: "Web Search", description: "searches the web" }] });
+      }),
+    );
+    const tools = await api.listAvailableTools();
+    expect(seen.url).toBe("/bff/tools");
+    expect(seen.method).toBe("GET");
+    expect(tools).toEqual([{ id: "tl_1", name: "Web Search", description: "searches the web" }]);
+  });
 });

@@ -644,11 +644,23 @@ function SubSkillsPanel({ api, palette: p, skillId }: { api: SkillStudioApi; pal
 // ---------------------------------------------------------------------------
 // Tool wiring — attach/detach tools. The tenant tool allowlist is enforced
 // server-side: an off-list tool attach is rejected with `tool_not_allowed`,
-// surfaced here. (The contract has no allowlist-enumeration endpoint, so the
-// picker is attach-by-id; the server is the authority on what's permitted.)
+// surfaced here.
+//
+// Picker strategy (#312): on mount, attempt to load the tenant's attachable
+// tool allowlist via `listAvailableTools()`. On success, show a <select>
+// excluding already-attached tools. On failure (BFF not yet upgraded, or the
+// op is denied), fall back silently to the original attach-by-id free-text
+// input — the server remains the allowlist authority in both cases, and the
+// `tool_not_allowed` error handling is the safety net regardless of which
+// input mode is active.
 // ---------------------------------------------------------------------------
 function ToolsPanel({ api, palette: p, skillId }: { api: SkillStudioApi; palette: Palette; skillId: string }) {
   const [tools, setTools] = useState<SkillToolSummary[] | null>(null);
+  // `null` = loading, `SkillToolSummary[]` = loaded (may be empty), `false` = failed
+  const [available, setAvailable] = useState<SkillToolSummary[] | false | null>(null);
+  // picker selection (id) when using the allowlist dropdown
+  const [pick, setPick] = useState("");
+  // free-text fallback when the allowlist call fails
   const [toolId, setToolId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -667,13 +679,34 @@ function ToolsPanel({ api, palette: p, skillId }: { api: SkillStudioApi; palette
     void reload();
   }, [api, skillId]);
 
+  // Load the attachable allowlist once per (api) mount. Failure → fall back to
+  // free-text. Reset the pick selection whenever the attached list refreshes so
+  // we don't offer an already-attached tool.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — load once per api instance
+  useEffect(() => {
+    setAvailable(null);
+    api
+      .listAvailableTools()
+      .then((list) => setAvailable(list))
+      .catch(() => setAvailable(false));
+  }, [api]);
+
+  // Candidates = available tools that are not already attached.
+  const candidates: SkillToolSummary[] =
+    available && tools
+      ? available.filter((a) => !tools.some((t) => t.id === a.id))
+      : [];
+
   async function attach() {
-    const id = toolId.trim();
+    // Use the picker id when the allowlist is available, otherwise fall back to
+    // the free-text input. The server is the authority either way.
+    const id = (available !== false ? pick : toolId).trim();
     if (!id) return;
     setBusy(true);
     setError(null);
     try {
       await api.attachTool(skillId, id);
+      setPick("");
       setToolId("");
       await reload();
     } catch (err) {
@@ -699,6 +732,11 @@ function ToolsPanel({ api, palette: p, skillId }: { api: SkillStudioApi; palette
       setBusy(false);
     }
   }
+
+  // Whether the picker (allowlist dropdown) is active vs. the free-text fallback.
+  const usePicker = available !== false;
+  // Disable the Attach button: busy, or nothing selected in whichever input is active.
+  const attachDisabled = busy || (usePicker ? !pick : !toolId.trim());
 
   return (
     <section>
@@ -729,14 +767,36 @@ function ToolsPanel({ api, palette: p, skillId }: { api: SkillStudioApi; palette
       )}
 
       <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-        <input
-          aria-label="Tool id to attach"
-          placeholder="Tool id (e.g. tl_…)"
-          value={toolId}
-          onInput={(e) => setToolId((e.currentTarget as HTMLInputElement).value)}
-          style={{ ...inputStyle(p), flex: 1 }}
-        />
-        <button type="button" disabled={!toolId.trim() || busy} onClick={() => void attach()} style={ghostBtn(p)}>
+        {usePicker ? (
+          // Allowlist picker — excludes already-attached tools.
+          <select
+            aria-label="Attach a tool"
+            value={pick}
+            onChange={(e) => setPick((e.currentTarget as HTMLSelectElement).value)}
+            style={{ ...inputStyle(p), flex: 1 }}
+            disabled={available === null || busy}
+          >
+            <option value="">
+              {available === null ? "Loading tools…" : candidates.length === 0 ? "No tools available" : "Attach a tool…"}
+            </option>
+            {candidates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name} ({t.id})
+              </option>
+            ))}
+          </select>
+        ) : (
+          // Free-text fallback — used when listAvailableTools() fails (e.g. BFF
+          // not yet upgraded). The server allowlist still gates every attach.
+          <input
+            aria-label="Tool id to attach"
+            placeholder="Tool id (e.g. tl_…)"
+            value={toolId}
+            onInput={(e) => setToolId((e.currentTarget as HTMLInputElement).value)}
+            style={{ ...inputStyle(p), flex: 1 }}
+          />
+        )}
+        <button type="button" disabled={attachDisabled} onClick={() => void attach()} style={ghostBtn(p)}>
           Attach tool
         </button>
       </div>
