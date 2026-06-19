@@ -6,10 +6,12 @@ import {
   type ListSkillsResponse,
   type ListSkillToolsResponse,
   type ModelCatalogResponse,
+  type PutRoleModelsRequest,
   type SkillCreateRequest,
   type SkillDetail as ContractSkillDetail,
   type SkillDetailResponse,
   type SkillParameter,
+  type SkillRoleModelsMap,
   type SkillStructuralUpdateRequest,
   type SkillSummary,
   type SkillToolSummary,
@@ -19,8 +21,10 @@ import {
 
 export type {
   ModelCatalogResponse,
+  PutRoleModelsRequest,
   SkillCreateRequest,
   SkillParameter,
+  SkillRoleModelsMap,
   SkillStructuralUpdateRequest,
   SkillSummary,
   SkillToolSummary,
@@ -83,6 +87,11 @@ export interface SkillStudioApi {
    * in which case the caller should fall back to the static catalog.
    */
   listModels(): Promise<ModelCatalogResponse>;
+  // #328 — per-role guard model config.
+  /** Return the full role → chain map for a skill (`GET /skills/:id/role-models`). */
+  getRoleModels(skillId: string): Promise<SkillRoleModelsMap>;
+  /** Replace the model chain for a single role (`PUT /skills/:id/role-models`). */
+  putRoleModels(skillId: string, body: PutRoleModelsRequest): Promise<unknown>;
 }
 
 type FetchFn = typeof globalThis.fetch;
@@ -238,6 +247,19 @@ export function createApi(apiBase: string, fetchImpl?: FetchFn): SkillStudioApi 
       return request<ModelCatalogResponse>(
         skillStudioRoutes.listModels.method,
         skillStudioRoutes.listModels.path,
+      );
+    },
+    async getRoleModels(skillId) {
+      return request<SkillRoleModelsMap>(
+        skillStudioRoutes.getRoleModels.method,
+        skillStudioRoutes.getRoleModels.build(skillId),
+      );
+    },
+    async putRoleModels(skillId, body) {
+      return request<unknown>(
+        skillStudioRoutes.putRoleModels.method,
+        skillStudioRoutes.putRoleModels.build(skillId),
+        body,
       );
     },
   };

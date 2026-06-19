@@ -9,6 +9,7 @@ import {
   type SkillWithFiles,
   attachSubSkillRequestSchema,
   attachToolRequestSchema,
+  putRoleModelsRequestSchema,
   setSkillParametersRequestSchema,
   skillCreateRequestSchema,
   skillStructuralUpdateRequestSchema,
@@ -520,6 +521,46 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
       return c.json({ providers: catalog.providers, reasoningEfforts: catalog.reasoningEfforts });
     } catch (err) {
       return respondError(c, err, "listModels");
+    }
+  });
+
+  // GET /skills/:id/role-models → SkillRoleModelsMap (#328)
+  // Returns the full role → chain map for the skill. Requires `skills:read`.
+  // The result is passed through as-is (no secrets, no filtering needed).
+  app.get("/skills/:id/role-models", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("getRoleModels", { skillId: id });
+      const roleModels = await client.skills.roleModels.get(id, { tenantId });
+      await audit({ op: "getRoleModels", tenantId, skillId: id, outcome: "allowed" });
+      return c.json(roleModels);
+    } catch (err) {
+      return respondError(c, err, "getRoleModels", { skillId: id });
+    }
+  });
+
+  // PUT /skills/:id/role-models (body: { role, chain }) → { role, chain } (#328)
+  // Replaces the model chain for a single role. Requires `skills:write`.
+  // The chain is validated by the contract schema before reaching the SDK.
+  app.put("/skills/:id/role-models", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("putRoleModels", { skillId: id });
+      const raw = await c.req.json().catch(() => undefined);
+      const parsed = putRoleModelsRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        return validationError(c, "putRoleModels", id, parsed.error.issues[0]?.message);
+      }
+      const result = await client.skills.roleModels.put(
+        id,
+        { role: parsed.data.role, chain: parsed.data.chain },
+        { tenantId },
+      );
+      await notifyMutation({ op: "putRoleModels", tenantId, skillId: id });
+      await audit({ op: "putRoleModels", tenantId, skillId: id, outcome: "allowed" });
+      return c.json(result);
+    } catch (err) {
+      return respondError(c, err, "putRoleModels", { skillId: id });
     }
   });
 

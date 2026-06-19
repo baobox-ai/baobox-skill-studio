@@ -15,7 +15,8 @@ export type SkillStudioReadOp =
   | "listTools"
   | "listAvailableTools"
   | "getParameters"
-  | "listModels"; // #320 — live LLM model catalog via GET /models
+  | "listModels" // #320 — live LLM model catalog via GET /models
+  | "getRoleModels"; // #328 — per-role guard model config via GET /skills/:id/role-models
 
 /**
  * Structural mutations. Each one funnels through `authz` (before the write) and,
@@ -30,7 +31,8 @@ export type SkillStudioMutationOp =
   | "detachSkill"
   | "attachTool"
   | "detachTool"
-  | "setParameters";
+  | "setParameters"
+  | "putRoleModels"; // #328 — per-role guard model config via PUT /skills/:id/role-models
 
 export type SkillStudioOp = SkillStudioReadOp | SkillStudioMutationOp;
 

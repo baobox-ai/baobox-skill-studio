@@ -111,6 +111,18 @@ export const skillStudioRoutes = {
     method: "GET",
     path: "/models",
   },
+  // #328 — per-role guard model config. Reads/replaces the chain for a single
+  // role via the SDK's `client.skills.roleModels.get/put` surface.
+  getRoleModels: {
+    method: "GET",
+    path: "/skills/:id/role-models",
+    build: (id: string): string => `/skills/${enc(id)}/role-models`,
+  },
+  putRoleModels: {
+    method: "PUT",
+    path: "/skills/:id/role-models",
+    build: (id: string): string => `/skills/${enc(id)}/role-models`,
+  },
 } as const;
 
 export type SkillStudioRoutes = typeof skillStudioRoutes;

@@ -65,6 +65,9 @@ interface StubImpl {
   toolsList?: () => Promise<ReturnType<typeof tool>[]>;
   // #320 — live model catalog
   catalogList?: () => Promise<unknown>;
+  // #328 — per-role guard model config
+  roleModelsGet?: (skillId: string, opts?: { tenantId?: string }) => Promise<unknown>;
+  roleModelsPut?: (skillId: string, body: unknown, opts?: { tenantId?: string }) => Promise<unknown>;
 }
 
 const MOCK_CATALOG = {
@@ -103,9 +106,19 @@ function makeStub(impl: StubImpl = {}) {
   const catalogCalls = {
     list: vi.fn(impl.catalogList ?? (async () => MOCK_CATALOG)),
   };
+  const MOCK_ROLE_MODELS = {
+    main: [],
+    preflight_guard: [],
+    postflight_guard: [],
+    eval_judge: [],
+  };
+  const roleModelsCalls = {
+    get: vi.fn(impl.roleModelsGet ?? (async () => MOCK_ROLE_MODELS)),
+    put: vi.fn(impl.roleModelsPut ?? (async (_id: string, body: unknown) => body)),
+  };
   // biome-ignore lint/suspicious/noExplicitAny: test stub stands in for BaoBoxClient
-  const client = { skills: calls, tools: toolsCalls, catalog: catalogCalls } as any;
-  return { client, calls, toolsCalls, catalogCalls };
+  const client = { skills: { ...calls, roleModels: roleModelsCalls }, tools: toolsCalls, catalog: catalogCalls } as any;
+  return { client, calls, toolsCalls, catalogCalls, roleModelsCalls };
 }
 
 function makeBff(
@@ -673,5 +686,147 @@ describe("listModels — GET /models (#320)", () => {
     expect(body).toHaveProperty("providers");
     expect(body).toHaveProperty("reasoningEfforts");
     expect(body).not.toHaveProperty("data");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /skills/:id/role-models + PUT /skills/:id/role-models — #328
+// ---------------------------------------------------------------------------
+describe("getRoleModels — GET /skills/:id/role-models (#328)", () => {
+  it("returns the full role map from the SDK", async () => {
+    const ROLE_MAP = {
+      main: [],
+      preflight_guard: [{ skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }],
+      postflight_guard: [],
+      eval_judge: [],
+    };
+    const stub = makeStub({ roleModelsGet: async () => ROLE_MAP });
+    const app = makeBff(stub);
+    const res = await app.request("/skills/sk_1/role-models");
+    expect(res.status).toBe(200);
+    const body = await res.json() as typeof ROLE_MAP;
+    expect(body.preflight_guard).toHaveLength(1);
+    expect(body.preflight_guard[0]?.model).toBe("openai/gpt-5");
+    expect(stub.roleModelsCalls.get).toHaveBeenCalledWith("sk_1", { tenantId: TENANT });
+  });
+
+  it("passes op=getRoleModels + skillId to the authz hook", async () => {
+    const stub = makeStub();
+    const authz = vi.fn(() => true);
+    const app = makeBff(stub, { authz });
+    await app.request("/skills/sk_9/role-models");
+    expect(authz).toHaveBeenCalledWith({ op: "getRoleModels", tenantId: TENANT, skillId: "sk_9" });
+  });
+
+  it("is denied (403) by the fail-closed default", async () => {
+    const stub = makeStub();
+    const app = createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      apiKey: "skb_k",
+      tenantId: TENANT,
+      client: stub.client,
+    });
+    const res = await app.request("/skills/sk_1/role-models");
+    expect(res.status).toBe(403);
+    expect(stub.roleModelsCalls.get).not.toHaveBeenCalled();
+  });
+
+  it("audits the allowed outcome", async () => {
+    const records: AuditRecord[] = [];
+    const stub = makeStub();
+    const app = makeBff(stub, { audit: (r) => void records.push(r) });
+    await app.request("/skills/sk_1/role-models");
+    expect(records).toContainEqual(
+      expect.objectContaining({ op: "getRoleModels", tenantId: TENANT, skillId: "sk_1", outcome: "allowed" }),
+    );
+  });
+});
+
+describe("putRoleModels — PUT /skills/:id/role-models (#328)", () => {
+  it("calls SDK roleModels.put and returns the result", async () => {
+    const PUT_RESULT = { role: "preflight_guard", chain: [{ skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }] };
+    const stub = makeStub({ roleModelsPut: async () => PUT_RESULT });
+    const app = makeBff(stub);
+    const res = await putJson(app, "/skills/sk_1/role-models", {
+      role: "preflight_guard",
+      chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }],
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as typeof PUT_RESULT;
+    expect(body.role).toBe("preflight_guard");
+    expect(stub.roleModelsCalls.put).toHaveBeenCalledWith(
+      "sk_1",
+      { role: "preflight_guard", chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }] },
+      { tenantId: TENANT },
+    );
+  });
+
+  it("accepts an empty chain (clear / inherit tenant default)", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const res = await putJson(app, "/skills/sk_1/role-models", { role: "main", chain: [] });
+    expect(res.status).toBe(200);
+    expect(stub.roleModelsCalls.put).toHaveBeenCalledWith("sk_1", { role: "main", chain: [] }, { tenantId: TENANT });
+  });
+
+  it("rejects an invalid body with 400 validation_error", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    // Unknown role
+    const res = await putJson(app, "/skills/sk_1/role-models", { role: "mystery", chain: [] });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("validation_error");
+    expect(stub.roleModelsCalls.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects a chain exceeding 4 entries with 400", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const entry = { llmIntegrationId: null, model: "m", llmSource: "pinned" };
+    const res = await putJson(app, "/skills/sk_1/role-models", {
+      role: "preflight_guard",
+      chain: [entry, entry, entry, entry, entry],
+    });
+    expect(res.status).toBe(400);
+    expect(stub.roleModelsCalls.put).not.toHaveBeenCalled();
+  });
+
+  it("fires onMutation after a successful put", async () => {
+    const events: SkillMutationEvent[] = [];
+    const stub = makeStub();
+    const app = makeBff(stub, { onMutation: (e) => void events.push(e) });
+    await putJson(app, "/skills/sk_1/role-models", { role: "postflight_guard", chain: [] });
+    expect(events).toContainEqual(expect.objectContaining({ op: "putRoleModels", skillId: "sk_1" }));
+  });
+
+  it("passes op=putRoleModels + skillId to the authz hook", async () => {
+    const stub = makeStub();
+    const authz = vi.fn(() => true);
+    const app = makeBff(stub, { authz });
+    await putJson(app, "/skills/sk_1/role-models", { role: "main", chain: [] });
+    expect(authz).toHaveBeenCalledWith({ op: "putRoleModels", tenantId: TENANT, skillId: "sk_1" });
+  });
+
+  it("is denied (403) by the fail-closed default", async () => {
+    const stub = makeStub();
+    const app = createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      apiKey: "skb_k",
+      tenantId: TENANT,
+      client: stub.client,
+    });
+    const res = await putJson(app, "/skills/sk_1/role-models", { role: "main", chain: [] });
+    expect(res.status).toBe(403);
+    expect(stub.roleModelsCalls.put).not.toHaveBeenCalled();
+  });
+
+  it("audits the allowed outcome", async () => {
+    const records: AuditRecord[] = [];
+    const stub = makeStub();
+    const app = makeBff(stub, { audit: (r) => void records.push(r) });
+    await putJson(app, "/skills/sk_1/role-models", { role: "main", chain: [] });
+    expect(records).toContainEqual(
+      expect.objectContaining({ op: "putRoleModels", tenantId: TENANT, skillId: "sk_1", outcome: "allowed" }),
+    );
   });
 });
