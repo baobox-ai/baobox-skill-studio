@@ -7,6 +7,7 @@ import type {
   SkillSummary,
   SkillToolSummary,
 } from "./api.js";
+import { PerRoleModelPanel } from "./roleModels.js";
 import {
   type CatalogProvider,
   type ModelFamily,
@@ -545,6 +546,7 @@ function EditableSkill({
       <SubSkillsPanel api={api} palette={p} skillId={detail.id} />
       <ToolsPanel api={api} palette={p} skillId={detail.id} />
       <ParametersPanel api={api} palette={p} skillId={detail.id} />
+      <PerRoleModelPanel api={api} palette={p} skillId={detail.id} catalog={catalog} />
     </div>
   );
 }

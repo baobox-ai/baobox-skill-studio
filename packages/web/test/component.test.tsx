@@ -45,6 +45,14 @@ function mockApi(over: Partial<SkillStudioApi> = {}): SkillStudioApi {
     listAvailableTools: vi.fn(async () => { throw new Error("not supported"); }),
     // #320 — default to rejecting so the picker falls back to the static catalog.
     listModels: vi.fn(async () => { throw new Error("not supported"); }),
+    // #328 — per-role guard model config. Default to empty chains so the panel renders.
+    getRoleModels: vi.fn(async () => ({
+      main: [],
+      preflight_guard: [],
+      postflight_guard: [],
+      eval_judge: [],
+    })),
+    putRoleModels: vi.fn(async () => ({})),
     ...over,
   };
 }

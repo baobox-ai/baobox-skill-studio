@@ -27,18 +27,18 @@ Your backend:  @baobox/skill-builder-bff  ──(apiKey, tenant-scoped)──▶
 
 | Package | Version | Where it runs | Role |
 | ------- | ------- | ------------- | ---- |
-| [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.18.0` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257 + model catalog #320) |
-| [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.4.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
-| [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.5.0` | your backend | mountable Hono BFF router |
-| [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.4.0` | browser | `<baobox-skill-builder>` Web Component |
+| [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.19.0` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257 + model catalog #320 + per-role models #328) |
+| [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.5.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
+| [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.6.0` | your backend | mountable Hono BFF router |
+| [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.5.0` | browser | `<baobox-skill-builder>` Web Component |
 
 These four versions are a **compatibility set** — install them together. The
-contract is the pinned interface between the BFF (`^0.5.0`) and the Web Component
-(`^0.4.0`); both depend on `@baobox/skill-builder-contract@^0.4.0`, and the BFF
-additionally needs `@baobox/sdk@^0.18.0` (the SDK that adds `client.catalog.list()`
-for the live model catalog #320). Mixing a `0.4.x` web bundle with a `0.4.x` BFF
-loses the `listModels` endpoint (404 → the Web Component falls back to the static
-catalog) — keep the set aligned.
+contract is the pinned interface between the BFF (`^0.6.0`) and the Web Component
+(`^0.5.0`); both depend on `@baobox/skill-builder-contract@^0.5.0`, and the BFF
+additionally needs `@baobox/sdk@^0.19.0` (the SDK that adds
+`client.skills.roleModels.get/put()` for per-role guard model config #328).
+Mixing a `0.5.x` web bundle with a `0.5.x` BFF loses the `getRoleModels` /
+`putRoleModels` endpoints (404 → panel shows a load error) — keep the set aligned.
 
 > Phase 2 is **additive**: the Phase-1 endpoints keep their exact method+path, so
 > an existing Phase-1 integration keeps working after the upgrade — you opt into
@@ -157,10 +157,10 @@ contract-shaped response.**
 
 The op set (`SkillStudioOp`) the `authz`/`audit` hooks see:
 
-- **reads** — `list`, `get`, `listAttachedSkills`, `listTools`, `listAvailableTools`, `getParameters`, `listModels`
+- **reads** — `list`, `get`, `listAttachedSkills`, `listTools`, `listAvailableTools`, `getParameters`, `listModels`, `getRoleModels`
 - **mutations** — `create`, `update` (Phase-1 PATCH), `updateStructural`
   (Phase-2 PUT), `attachSkill`, `detachSkill`, `attachTool`, `detachTool`,
-  `setParameters`
+  `setParameters`, `putRoleModels`
 
 ---
 
@@ -414,6 +414,60 @@ safe to return as-is to the browser.
 The `authz` hook sees `op="listModels"` with no `skillId` (catalog is
 non-tenant). The response shape mirrors the SDK `LlmCatalog` type (also
 declared in `@baobox/skill-builder-contract` as `ModelCatalogResponse`).
+
+#### `GET /skills/:id/role-models` → `SkillRoleModelsMap` (#328)
+
+Returns the full role → chain map for a skill. Requires `skills:read`. The
+`authz` hook sees `op="getRoleModels"` with `skillId`. Response shape is
+`Record<ModelRole, SkillRoleModel[]>` (re-exported from `@baobox/sdk` via the
+contract as `SkillRoleModelsMap`).
+
+```jsonc
+// GET /skills/sk_abc/role-models
+{
+  "main": [],
+  "preflight_guard": [
+    { "skillId": "sk_abc", "role": "preflight_guard", "position": 0,
+      "llmIntegrationId": null, "model": "openai/gpt-5", "llmSource": "pinned" }
+  ],
+  "postflight_guard": [],
+  "eval_judge": []
+}
+```
+
+#### `PUT /skills/:id/role-models` (body: `{ role, chain }`) → `{ role, chain }` (#328)
+
+Replaces the model chain for **one role** on a skill. Requires `skills:write`.
+The `authz` hook sees `op="putRoleModels"` with `skillId`. Chain is an ordered
+array of up to 4 entries; an empty array clears the role (inherits tenant
+default). In the Studio scope, `llmIntegrationId` is always `null` and
+`llmSource` is `"pinned"` (catalog-model-only; per-integration pinning is a
+documented follow-up).
+
+```jsonc
+// PUT /skills/sk_abc/role-models
+// request body:
+{
+  "role": "preflight_guard",
+  "chain": [
+    { "llmIntegrationId": null, "model": "openai/gpt-5", "llmSource": "pinned" },
+    { "llmIntegrationId": null, "model": "openai/gpt-4o", "llmSource": "pinned" }
+  ]
+}
+// response: { "role": "preflight_guard", "chain": [...] }
+// clear (inherit default):
+{ "role": "preflight_guard", "chain": [] }
+```
+
+**Studio scope** — the "Per-role models & fallback" panel covers three roles:
+- `preflight_guard` — PRIMARY + optional BACKUP model selects
+- `postflight_guard` — PRIMARY + optional BACKUP model selects
+- `main` — BACKUP only (its primary is the skill's main model configured in
+  the main edit form)
+
+`eval_judge` is not exposed in the Studio UI (judge configuration is a
+platform-level concern). The BFF and contract types include it for API
+completeness.
 
 #### `POST /skills/:id/tools` → `{ data: { attached: true } }`
 

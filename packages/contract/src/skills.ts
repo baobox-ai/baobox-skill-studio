@@ -1,5 +1,60 @@
-import type { Skill, SkillFileReference, SkillWithFiles } from "@baobox/sdk";
+import type { ModelRole, Skill, SkillFileReference, SkillWithFiles } from "@baobox/sdk";
 import { z } from "zod";
+
+// ---------------------------------------------------------------------------
+// Per-role model config (#328) — re-exported from @baobox/sdk so downstream
+// consumers (BFF + Web Component) share one source of truth without importing
+// @baobox/sdk directly. The contract owns the Zod validation layer.
+// ---------------------------------------------------------------------------
+export type {
+  ModelRole,
+  RoleModelChainEntry,
+  SkillRoleModel,
+  SkillRoleModelsMap,
+} from "@baobox/sdk";
+
+/**
+ * The four roles the server supports. Re-declared as a const tuple so the
+ * contract can build Zod schemas (z.enum requires a tuple, not a type alias).
+ * A compile-time drift guard below asserts this stays in sync with the SDK type.
+ */
+export const MODEL_ROLES = [
+  "main",
+  "preflight_guard",
+  "postflight_guard",
+  "eval_judge",
+] as const;
+
+// Compile-time drift guard: every MODEL_ROLES entry must be assignable to the
+// SDK's ModelRole. If the SDK ever removes or renames a role, this line stops
+// compiling — keeping the contract honest without runtime overhead.
+const _modelRolesTrackSdk = ((): readonly ModelRole[] => MODEL_ROLES)();
+void _modelRolesTrackSdk;
+
+/** Zod validator for a single PUT body — the role being updated. */
+export const modelRoleSchema = z.enum(MODEL_ROLES);
+
+/**
+ * A single entry in a role's chain as supplied in a PUT request.
+ * Studio sends `{ llmIntegrationId: null, model, llmSource: "pinned" }` for
+ * catalog-pinned entries (no off-box integration in Studio scope).
+ */
+export const roleModelChainEntrySchema = z
+  .object({
+    llmIntegrationId: z.string().nullable(),
+    model: z.string().nullable(),
+    llmSource: z.enum(["tenant_default", "platform", "pinned"]),
+  })
+  .strict();
+
+/** PUT /skills/:id/role-models — replace one role's chain (max 4 entries). */
+export const putRoleModelsRequestSchema = z
+  .object({
+    role: modelRoleSchema,
+    chain: z.array(roleModelChainEntrySchema).max(4),
+  })
+  .strict();
+export type PutRoleModelsRequest = z.infer<typeof putRoleModelsRequestSchema>;
 
 // ---------------------------------------------------------------------------
 // Reasoning effort — the new optional parameter for reasoning-class models

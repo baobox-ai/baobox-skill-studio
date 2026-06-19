@@ -1,12 +1,15 @@
-import type { Skill, SkillWithFiles } from "@baobox/sdk";
+import type { ModelRole, Skill, SkillWithFiles } from "@baobox/sdk";
 import { describe, expect, it } from "vitest";
 import {
+  MODEL_ROLES,
   REASONING_EFFORT_VALUES,
   attachSubSkillRequestSchema,
   attachToolRequestSchema,
   contractErrorSchema,
   listSkillsResponseSchema,
   modelCatalogResponseSchema,
+  modelRoleSchema,
+  putRoleModelsRequestSchema,
   reasoningEffortSchema,
   setSkillParametersRequestSchema,
   skillCreateRequestSchema,
@@ -380,6 +383,111 @@ describe("modelCatalogResponseSchema (#320)", () => {
         },
       ],
       reasoningEfforts: [],
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+// ===========================================================================
+// #328 — Per-role guard model config
+// ===========================================================================
+
+describe("MODEL_ROLES drift-guard (#328)", () => {
+  // Mirror of the SDK ModelRole union — keeps the contract in sync with the SDK.
+  // If the SDK adds or removes a role, update MODEL_ROLES and this assertion.
+  const SDK_MODEL_ROLES: readonly ModelRole[] = [
+    "main",
+    "preflight_guard",
+    "postflight_guard",
+    "eval_judge",
+  ];
+
+  it("MODEL_ROLES equals the SDK ModelRole union members", () => {
+    expect(Array.from(MODEL_ROLES)).toEqual(Array.from(SDK_MODEL_ROLES));
+  });
+});
+
+describe("getRoleModels / putRoleModels routes (#328)", () => {
+  it("exposes GET /skills/:id/role-models in the route table", () => {
+    expect(skillStudioRoutes.getRoleModels.method).toBe("GET");
+    expect(skillStudioRoutes.getRoleModels.path).toBe("/skills/:id/role-models");
+    expect(skillStudioRoutes.getRoleModels.build("sk_1")).toBe("/skills/sk_1/role-models");
+    expect(skillStudioRoutes.getRoleModels.build("a/b")).toBe("/skills/a%2Fb/role-models");
+  });
+
+  it("exposes PUT /skills/:id/role-models in the route table", () => {
+    expect(skillStudioRoutes.putRoleModels.method).toBe("PUT");
+    expect(skillStudioRoutes.putRoleModels.path).toBe("/skills/:id/role-models");
+    expect(skillStudioRoutes.putRoleModels.build("sk_1")).toBe("/skills/sk_1/role-models");
+  });
+});
+
+describe("modelRoleSchema (#328)", () => {
+  it("accepts every valid role", () => {
+    for (const role of MODEL_ROLES) {
+      expect(modelRoleSchema.safeParse(role).success).toBe(true);
+    }
+  });
+
+  it("rejects an unknown role string", () => {
+    expect(modelRoleSchema.safeParse("main_guard").success).toBe(false);
+    expect(modelRoleSchema.safeParse("").success).toBe(false);
+  });
+});
+
+describe("putRoleModelsRequestSchema (#328)", () => {
+  it("accepts a valid put body with a pinned chain entry", () => {
+    const r = putRoleModelsRequestSchema.safeParse({
+      role: "preflight_guard",
+      chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("accepts an empty chain (clear / inherit tenant default)", () => {
+    const r = putRoleModelsRequestSchema.safeParse({ role: "main", chain: [] });
+    expect(r.success).toBe(true);
+  });
+
+  it("accepts a chain of up to 4 entries", () => {
+    const entry = { llmIntegrationId: null, model: "openai/gpt-4o", llmSource: "pinned" as const };
+    const r = putRoleModelsRequestSchema.safeParse({
+      role: "postflight_guard",
+      chain: [entry, entry, entry, entry],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects a chain exceeding 4 entries", () => {
+    const entry = { llmIntegrationId: null, model: "m", llmSource: "pinned" as const };
+    const r = putRoleModelsRequestSchema.safeParse({
+      role: "preflight_guard",
+      chain: [entry, entry, entry, entry, entry],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects an unknown role", () => {
+    const r = putRoleModelsRequestSchema.safeParse({
+      role: "mystery_role",
+      chain: [],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects an unknown llmSource", () => {
+    const r = putRoleModelsRequestSchema.safeParse({
+      role: "main",
+      chain: [{ llmIntegrationId: null, model: "m", llmSource: "custom" }],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rejects unknown keys (.strict())", () => {
+    const r = putRoleModelsRequestSchema.safeParse({
+      role: "main",
+      chain: [],
+      extra: "field",
     });
     expect(r.success).toBe(false);
   });
