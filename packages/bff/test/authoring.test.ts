@@ -68,6 +68,9 @@ interface StubImpl {
   // #328 — per-role guard model config
   roleModelsGet?: (skillId: string, opts?: { tenantId?: string }) => Promise<unknown>;
   roleModelsPut?: (skillId: string, body: unknown, opts?: { tenantId?: string }) => Promise<unknown>;
+  // #330 — integration-first model picker
+  llmIntegrationsList?: (opts?: { tenantId?: string }) => Promise<unknown[]>;
+  llmIntegrationsListModels?: (id: string, opts?: { tenantId?: string }) => Promise<unknown>;
 }
 
 const MOCK_CATALOG = {
@@ -116,9 +119,25 @@ function makeStub(impl: StubImpl = {}) {
     get: vi.fn(impl.roleModelsGet ?? (async () => MOCK_ROLE_MODELS)),
     put: vi.fn(impl.roleModelsPut ?? (async (_id: string, body: unknown) => body)),
   };
+  const MOCK_INTEGRATIONS = [
+    { id: "int_openai", displayName: "OpenAI (tenant)", provider: "openai", defaultModel: "openai/gpt-4o", isDefault: true, apiKeyMask: "sk-...abc" },
+  ];
+  const MOCK_INTEGRATION_MODELS = {
+    integrationId: "int_openai",
+    provider: "openai",
+    models: [
+      { id: "openai/gpt-4o", displayName: "GPT-4o", source: "provider", paramProfile: "sampling", reasoningEfforts: null, pricing: null },
+      { id: "openai/gpt-5", displayName: "GPT-5", source: "provider", paramProfile: "reasoning", reasoningEfforts: ["minimal", "low", "medium", "high"], pricing: null },
+    ],
+    providerListError: null,
+  };
+  const llmIntegrationsCalls = {
+    list: vi.fn(impl.llmIntegrationsList ?? (async () => MOCK_INTEGRATIONS)),
+    listModels: vi.fn(impl.llmIntegrationsListModels ?? (async () => MOCK_INTEGRATION_MODELS)),
+  };
   // biome-ignore lint/suspicious/noExplicitAny: test stub stands in for BaoBoxClient
-  const client = { skills: { ...calls, roleModels: roleModelsCalls }, tools: toolsCalls, catalog: catalogCalls } as any;
-  return { client, calls, toolsCalls, catalogCalls, roleModelsCalls };
+  const client = { skills: { ...calls, roleModels: roleModelsCalls }, tools: toolsCalls, catalog: catalogCalls, llmIntegrations: llmIntegrationsCalls } as any;
+  return { client, calls, toolsCalls, catalogCalls, roleModelsCalls, llmIntegrationsCalls };
 }
 
 function makeBff(
@@ -827,6 +846,163 @@ describe("putRoleModels — PUT /skills/:id/role-models (#328)", () => {
     await putJson(app, "/skills/sk_1/role-models", { role: "main", chain: [] });
     expect(records).toContainEqual(
       expect.objectContaining({ op: "putRoleModels", tenantId: TENANT, skillId: "sk_1", outcome: "allowed" }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /llm-integrations — listLlmIntegrations (#330)
+// ---------------------------------------------------------------------------
+describe("listLlmIntegrations — GET /llm-integrations (#330)", () => {
+  it("returns the tenant's LLM integrations wrapped in { data }", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const res = await app.request("/llm-integrations");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: unknown[] };
+    expect(body.data).toHaveLength(1);
+    expect((body.data[0] as { id: string }).id).toBe("int_openai");
+    expect(stub.llmIntegrationsCalls.list).toHaveBeenCalledWith({ tenantId: TENANT });
+  });
+
+  it("returns an empty array when no integrations are configured", async () => {
+    const stub = makeStub({ llmIntegrationsList: async () => [] });
+    const app = makeBff(stub);
+    const res = await app.request("/llm-integrations");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { data: unknown[] };
+    expect(body.data).toEqual([]);
+  });
+
+  it("passes op=listLlmIntegrations to the authz hook", async () => {
+    const stub = makeStub();
+    const authz = vi.fn(() => true);
+    const app = makeBff(stub, { authz });
+    await app.request("/llm-integrations");
+    expect(authz).toHaveBeenCalledWith({ op: "listLlmIntegrations", tenantId: TENANT });
+  });
+
+  it("is denied (403) by the fail-closed default when no authz hook is configured", async () => {
+    const stub = makeStub();
+    const app = createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      apiKey: "skb_k",
+      tenantId: TENANT,
+      client: stub.client,
+      // no authz, no allowUnauthenticated → fail closed
+    });
+    const res = await app.request("/llm-integrations");
+    expect(res.status).toBe(403);
+    expect(stub.llmIntegrationsCalls.list).not.toHaveBeenCalled();
+  });
+
+  it("maps an SDK error to the contract error envelope", async () => {
+    const stub = makeStub({
+      llmIntegrationsList: async () => {
+        throw new BaoBoxError(403, "forbidden", "key lacks integrations:read grant", "req_i1", null);
+      },
+    });
+    const app = makeBff(stub);
+    const res = await app.request("/llm-integrations");
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("forbidden");
+  });
+
+  it("audits the allowed outcome", async () => {
+    const records: AuditRecord[] = [];
+    const stub = makeStub();
+    const app = makeBff(stub, { audit: (r) => void records.push(r) });
+    await app.request("/llm-integrations");
+    expect(records).toContainEqual(
+      expect.objectContaining({ op: "listLlmIntegrations", tenantId: TENANT, outcome: "allowed" }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /llm-integrations/:id/models — listIntegrationModels (#330)
+// ---------------------------------------------------------------------------
+describe("listIntegrationModels — GET /llm-integrations/:id/models (#330)", () => {
+  it("returns the IntegrationModelsView for the given integration", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const res = await app.request("/llm-integrations/int_openai/models");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { integrationId: string; models: unknown[] };
+    expect(body.integrationId).toBe("int_openai");
+    expect(body.models).toHaveLength(2);
+    expect(stub.llmIntegrationsCalls.listModels).toHaveBeenCalledWith("int_openai", { tenantId: TENANT });
+  });
+
+  it("URL-decodes the integration id before forwarding to the SDK", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    await app.request("/llm-integrations/int%2Fwith-slash/models");
+    expect(stub.llmIntegrationsCalls.listModels).toHaveBeenCalledWith(
+      "int/with-slash",
+      { tenantId: TENANT },
+    );
+  });
+
+  it("surfaces providerListError in the response body when the provider list call fails", async () => {
+    const stub = makeStub({
+      llmIntegrationsListModels: async () => ({
+        integrationId: "int_openai",
+        provider: "openai",
+        models: [],
+        providerListError: "provider API unreachable",
+      }),
+    });
+    const app = makeBff(stub);
+    const res = await app.request("/llm-integrations/int_openai/models");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { providerListError: string | null };
+    expect(body.providerListError).toBe("provider API unreachable");
+  });
+
+  it("passes op=listIntegrationModels to the authz hook", async () => {
+    const stub = makeStub();
+    const authz = vi.fn(() => true);
+    const app = makeBff(stub, { authz });
+    await app.request("/llm-integrations/int_openai/models");
+    expect(authz).toHaveBeenCalledWith({ op: "listIntegrationModels", tenantId: TENANT });
+  });
+
+  it("is denied (403) by the fail-closed default when no authz hook is configured", async () => {
+    const stub = makeStub();
+    const app = createSkillBuilderBff({
+      endpoint: "https://baobox.example.com",
+      apiKey: "skb_k",
+      tenantId: TENANT,
+      client: stub.client,
+      // no authz, no allowUnauthenticated → fail closed
+    });
+    const res = await app.request("/llm-integrations/int_openai/models");
+    expect(res.status).toBe(403);
+    expect(stub.llmIntegrationsCalls.listModels).not.toHaveBeenCalled();
+  });
+
+  it("maps an SDK error to the contract error envelope", async () => {
+    const stub = makeStub({
+      llmIntegrationsListModels: async () => {
+        throw new BaoBoxError(404, "not_found", "integration int_bad not found", "req_i2", null);
+      },
+    });
+    const app = makeBff(stub);
+    const res = await app.request("/llm-integrations/int_bad/models");
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("not_found");
+  });
+
+  it("audits the allowed outcome", async () => {
+    const records: AuditRecord[] = [];
+    const stub = makeStub();
+    const app = makeBff(stub, { audit: (r) => void records.push(r) });
+    await app.request("/llm-integrations/int_openai/models");
+    expect(records).toContainEqual(
+      expect.objectContaining({ op: "listIntegrationModels", tenantId: TENANT, outcome: "allowed" }),
     );
   });
 });

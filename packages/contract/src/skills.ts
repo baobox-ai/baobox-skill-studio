@@ -1,4 +1,4 @@
-import type { ModelRole, Skill, SkillFileReference, SkillWithFiles } from "@baobox/sdk";
+import type { IntegrationModelsView, LlmIntegration, ModelRole, Skill, SkillFileReference, SkillWithFiles } from "@baobox/sdk";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -283,6 +283,14 @@ export const skillStructuralUpdateRequestSchema = z
     model: z.string().min(1).optional(),
     temperature: z.number().min(0).max(2).optional(),
     maxTokens: z.number().int().positive().optional(),
+    // #330 — integration-first model picker: optionally bind to a tenant LLM
+    // integration. `null` clears the pin (reverts to tenant default). Additive:
+    // absent on skills that were saved before #330 and treated as null server-side.
+    llmIntegrationId: z.string().nullable().optional(),
+    // #330 — llmSource drives how the backend resolver selects the model key/
+    // provider. "pinned" = use the explicit integration + model; "tenant_default"
+    // = defer to the tenant's default integration.
+    llmSource: z.enum(["tenant_default", "platform", "pinned"]).optional(),
   })
   .strict()
   .refine((body) => Object.keys(body).length >= 1, {
@@ -292,11 +300,13 @@ export type SkillStructuralUpdateRequest = z.infer<typeof skillStructuralUpdateR
 
 // Compile-time drift guards — create/structural-update editable fields track
 // `@baobox/sdk`'s `Skill` (same posture as `_updateTracksSkill` above).
+// `llmIntegrationId` and `llmSource` are NOT included in the `Skill` subset
+// guard — they originate in this contract (#330), not the SDK `Skill` type.
 type CreatableSkillFields = Pick<Skill, "name" | "systemPrompt"> &
   Partial<Pick<Skill, "description" | "model" | "temperature" | "maxTokens" | "sourceUrl">>;
 const _createTracksSkill = (c: SkillCreateRequest): CreatableSkillFields => c;
 const _structuralTracksSkill = (
-  u: SkillStructuralUpdateRequest,
+  u: Omit<SkillStructuralUpdateRequest, "llmIntegrationId" | "llmSource">,
 ): Partial<
   Pick<Skill, "name" | "description" | "systemPrompt" | "model" | "temperature" | "maxTokens">
 > => u;
@@ -469,3 +479,87 @@ export const modelCatalogResponseSchema = z.object({
   reasoningEfforts: z.array(z.string()),
 });
 export type ModelCatalogResponse = z.infer<typeof modelCatalogResponseSchema>;
+
+// ---------------------------------------------------------------------------
+// LLM integrations (#330) — the tenant's configured LLM integrations so the
+// Web Component can offer an integration-first model picker (pick integration
+// → pick model from that integration's live list). The SDK types are re-exported
+// here so the BFF + Web Component share one source of truth without importing
+// `@baobox/sdk` directly.
+//
+// `LlmIntegration` is API-safe (no real credentials — `apiKeyMask` is always
+// `"***"`). `IntegrationModelsView` combines catalog + provider-live models and
+// carries a `providerListError` soft-warning when the provider list fetch failed.
+// ---------------------------------------------------------------------------
+
+// Re-export SDK types for downstream consumers (BFF + Web Component).
+export type { IntegrationModelsView, LlmIntegration } from "@baobox/sdk";
+
+// Compile-time drift guard: `LlmIntegration` fields the contract schema
+// validates must stay in sync with the SDK type. If the SDK renames a field,
+// the guard below stops compiling — keeping the schema honest.
+const _sdkIntegrationGuard = (i: LlmIntegration): {
+  id: string;
+  displayName: string;
+  provider: string;
+  defaultModel: string;
+  isDefault: boolean;
+  apiKeyMask: string;
+} => i;
+void _sdkIntegrationGuard;
+
+/** Zod schema for a single `LlmIntegration` entry (mirrors the SDK type). */
+export const llmIntegrationSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  provider: z.string(),
+  defaultModel: z.string(),
+  isDefault: z.boolean(),
+  apiKeyMask: z.string(),
+});
+
+/** Response envelope for `GET /llm-integrations` (#330). */
+export const listLlmIntegrationsResponseSchema = z.object({
+  data: z.array(llmIntegrationSchema),
+});
+export type ListLlmIntegrationsResponse = z.infer<typeof listLlmIntegrationsResponseSchema>;
+
+/** Zod schema for a single integration model entry (mirrors `IntegrationModel` from SDK). */
+export const integrationModelSchema = z.object({
+  id: z.string(),
+  displayName: z.string(),
+  source: z.enum(["catalog", "provider", "custom"]),
+  paramProfile: z.enum(["sampling", "reasoning"]),
+  reasoningEfforts: z.array(z.string()),
+  pricing: z
+    .object({
+      inputUsdPerMTok: z.number(),
+      outputUsdPerMTok: z.number(),
+      asOf: z.string(),
+    })
+    .nullable(),
+});
+export type IntegrationModel = z.infer<typeof integrationModelSchema>;
+
+/**
+ * Response schema for `GET /llm-integrations/:id/models` (#330).
+ * Mirrors the SDK `IntegrationModelsView` shape.
+ */
+export const integrationModelsViewSchema = z.object({
+  integrationId: z.string(),
+  provider: z.string(),
+  models: z.array(integrationModelSchema),
+  /** Non-null when the server could not fetch the live provider model list. */
+  providerListError: z.string().nullable(),
+});
+export type IntegrationModelsViewResponse = z.infer<typeof integrationModelsViewSchema>;
+
+// Compile-time drift guard: `IntegrationModelsView` fields the schema validates
+// must stay in sync with the SDK type.
+const _sdkIntegrationModelsGuard = (v: IntegrationModelsView): {
+  integrationId: string;
+  provider: string;
+  models: unknown[];
+  providerListError: string | null;
+} => v;
+void _sdkIntegrationModelsGuard;

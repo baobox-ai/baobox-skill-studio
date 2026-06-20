@@ -1,10 +1,13 @@
 import {
   type AttachAckResponse,
   type DetachAckResponse,
+  type IntegrationModelsViewResponse,
   type ListAttachedSkillsResponse,
   type ListAvailableToolsResponse,
+  type ListLlmIntegrationsResponse,
   type ListSkillsResponse,
   type ListSkillToolsResponse,
+  type LlmIntegration,
   type ModelCatalogResponse,
   type PutRoleModelsRequest,
   type SkillCreateRequest,
@@ -20,6 +23,8 @@ import {
 } from "@baobox/skill-builder-contract";
 
 export type {
+  IntegrationModelsViewResponse,
+  LlmIntegration,
   ModelCatalogResponse,
   PutRoleModelsRequest,
   SkillCreateRequest,
@@ -92,6 +97,11 @@ export interface SkillStudioApi {
   getRoleModels(skillId: string): Promise<SkillRoleModelsMap>;
   /** Replace the model chain for a single role (`PUT /skills/:id/role-models`). */
   putRoleModels(skillId: string, body: PutRoleModelsRequest): Promise<unknown>;
+  // #330 — integration-first model picker.
+  /** Return the tenant's configured LLM integrations (`GET /llm-integrations`). */
+  listLlmIntegrations(): Promise<LlmIntegration[]>;
+  /** Return the live model list for a specific integration (`GET /llm-integrations/:id/models`). */
+  listIntegrationModels(integrationId: string): Promise<IntegrationModelsViewResponse>;
 }
 
 type FetchFn = typeof globalThis.fetch;
@@ -260,6 +270,19 @@ export function createApi(apiBase: string, fetchImpl?: FetchFn): SkillStudioApi 
         skillStudioRoutes.putRoleModels.method,
         skillStudioRoutes.putRoleModels.build(skillId),
         body,
+      );
+    },
+    async listLlmIntegrations() {
+      const body = await request<ListLlmIntegrationsResponse>(
+        skillStudioRoutes.listLlmIntegrations.method,
+        skillStudioRoutes.listLlmIntegrations.path,
+      );
+      return body.data;
+    },
+    async listIntegrationModels(integrationId) {
+      return request<IntegrationModelsViewResponse>(
+        skillStudioRoutes.listIntegrationModels.method,
+        skillStudioRoutes.listIntegrationModels.build(integrationId),
       );
     },
   };

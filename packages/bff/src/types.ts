@@ -16,7 +16,9 @@ export type SkillStudioReadOp =
   | "listAvailableTools"
   | "getParameters"
   | "listModels" // #320 — live LLM model catalog via GET /models
-  | "getRoleModels"; // #328 — per-role guard model config via GET /skills/:id/role-models
+  | "getRoleModels" // #328 — per-role guard model config via GET /skills/:id/role-models
+  | "listLlmIntegrations" // #330 — tenant's configured LLM integrations
+  | "listIntegrationModels"; // #330 — models for a specific integration
 
 /**
  * Structural mutations. Each one funnels through `authz` (before the write) and,

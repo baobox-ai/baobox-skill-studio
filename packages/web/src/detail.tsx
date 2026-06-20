@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type {
+  IntegrationModelsViewResponse,
+  LlmIntegration,
   SkillDetail,
   SkillParameter,
   SkillStructuralUpdateRequest,
@@ -48,6 +50,9 @@ type EditDraft = {
   maxTokens: string;
   // reasoningEffort is optional — only relevant for reasoning-family models.
   reasoningEffort: string;
+  // #330 — integration-first picker. Empty string means "use tenant default"
+  // (no pin). Non-empty binds to a specific integration id.
+  llmIntegrationId: string;
 };
 
 function toDraft(d: SkillDetail): EditDraft {
@@ -59,6 +64,8 @@ function toDraft(d: SkillDetail): EditDraft {
     temperature: String(d.temperature),
     maxTokens: String(d.maxTokens),
     reasoningEffort: d.reasoningEffort ?? "medium",
+    // Cast: SkillDetail may carry llmIntegrationId as a runtime additive field.
+    llmIntegrationId: ((d as unknown as { llmIntegrationId?: string | null }).llmIntegrationId) ?? "",
   };
 }
 
@@ -194,53 +201,150 @@ function ReadOnlySkill({
 }
 
 // ---------------------------------------------------------------------------
-// Model picker — combobox backed by a static catalog grouped by provider (#302).
-// Free-text entry is always allowed (typed value is used as-is when not in
-// the catalog). The <datalist> approach keeps it a native <input> so
-// accessibility and keyboard behavior are handled by the browser.
+// Integration-first model picker (#330).
+//
+// Flow:
+//   1. "LLM integration" <select> — the tenant's configured integrations from
+//      GET /llm-integrations. Includes a "Use tenant default" sentinel (empty
+//      value). If no integrations are configured, falls back gracefully to the
+//      existing free-text/catalog model entry.
+//   2. On integration select → fetch GET /llm-integrations/:id/models → model
+//      <select> listing ONLY that integration's models.
+//   3. The param panel (temperature/maxTokens vs reasoningEffort) keys off the
+//      selected model's paramProfile from the integration model list.
+//   4. Save sends { llmIntegrationId, model, llmSource: integrationId ?
+//      "pinned" : "tenant_default" }.
+//
+// Graceful degradation:
+//   - No integrations → message + free-text/catalog model input.
+//   - Loading → disabled selects with placeholder text.
+//   - providerListError → soft note below model select.
 // ---------------------------------------------------------------------------
-const MODEL_DATALIST_ID = "bb-skill-model-list";
 
-function ModelPicker({
-  value,
-  onChange,
+/** Sentinel value meaning "no explicit integration — use tenant default". */
+const PLATFORM_OPTION = "" as const;
+
+function IntegrationModelPicker({
+  integrationId,
+  model,
+  onIntegrationChange,
+  onModelChange,
   palette: p,
   disabled,
+  integrations,
+  integrationsLoading,
+  modelsView,
+  modelsLoading,
   catalog,
 }: {
-  value: string;
-  onChange: (v: string) => void;
+  integrationId: string;
+  model: string;
+  onIntegrationChange: (id: string) => void;
+  onModelChange: (model: string) => void;
   palette: Palette;
   disabled?: boolean;
-  /** Active model catalog — live from BFF when available, static fallback otherwise. */
+  integrations: LlmIntegration[] | null;
+  integrationsLoading: boolean;
+  modelsView: IntegrationModelsViewResponse | null;
+  modelsLoading: boolean;
+  /** Fallback catalog — used when no integrations are configured. */
   catalog: CatalogProvider[];
 }) {
-  return (
-    <>
-      <input
-        id="bb-model"
-        type="text"
-        aria-label="Model"
-        list={MODEL_DATALIST_ID}
-        value={value}
-        disabled={disabled}
-        onInput={(e) => onChange((e.currentTarget as HTMLInputElement).value)}
-        style={inputStyle(p)}
-        placeholder="e.g. MiniMax-M2.7"
-        autoComplete="off"
-      />
-      <datalist id={MODEL_DATALIST_ID}>
-        {catalog.map((provider) => (
-          <optgroup key={provider.id} label={provider.label}>
-            {provider.models.map((m) => (
+  // No integrations configured → fall back to free-text catalog input.
+  if (!integrationsLoading && integrations !== null && integrations.length === 0) {
+    const MODEL_DATALIST_ID = "bb-skill-model-list-fallback";
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+        <div role="note" style={{ fontSize: "0.78rem", opacity: 0.65 }}>
+          No LLM integrations configured for this tenant. Enter a model id directly.
+        </div>
+        <input
+          id="bb-model"
+          type="text"
+          aria-label="Model"
+          list={MODEL_DATALIST_ID}
+          value={model}
+          disabled={disabled}
+          onInput={(e) => onModelChange((e.currentTarget as HTMLInputElement).value)}
+          style={inputStyle(p)}
+          placeholder="e.g. openai/gpt-5"
+          autoComplete="off"
+        />
+        <datalist id={MODEL_DATALIST_ID}>
+          {catalog.map((provider) =>
+            provider.models.map((m) => (
               <option key={m.id} value={m.id}>
                 {provider.label} / {m.label}
               </option>
+            )),
+          )}
+        </datalist>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+      {/* Step 1 — integration selector */}
+      <div>
+        <label style={labelStyle()} for="bb-integration">
+          LLM integration
+        </label>
+        <select
+          id="bb-integration"
+          aria-label="LLM integration"
+          value={integrationId}
+          disabled={disabled || integrationsLoading}
+          onChange={(e) => onIntegrationChange((e.currentTarget as HTMLSelectElement).value)}
+          style={inputStyle(p)}
+        >
+          <option value={PLATFORM_OPTION}>
+            {integrationsLoading ? "Loading integrations…" : "— Use tenant default —"}
+          </option>
+          {(integrations ?? []).map((intg) => (
+            <option key={intg.id} value={intg.id}>
+              {intg.displayName} ({intg.provider})
+              {intg.isDefault ? " ★" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Step 2 — model selector (only when an integration is pinned) */}
+      {integrationId !== PLATFORM_OPTION && (
+        <div>
+          <label style={labelStyle()} for="bb-model">
+            Model
+          </label>
+          <select
+            id="bb-model"
+            aria-label="Model"
+            value={model}
+            disabled={disabled || modelsLoading}
+            onChange={(e) => onModelChange((e.currentTarget as HTMLSelectElement).value)}
+            style={inputStyle(p)}
+          >
+            <option value="">
+              {modelsLoading
+                ? "Loading models…"
+                : modelsView && modelsView.models.length === 0
+                  ? "No models available"
+                  : "— Select a model —"}
+            </option>
+            {(modelsView?.models ?? []).map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.displayName}
+              </option>
             ))}
-          </optgroup>
-        ))}
-      </datalist>
-    </>
+          </select>
+          {modelsView?.providerListError && (
+            <div role="note" style={{ fontSize: "0.75rem", opacity: 0.65, marginTop: "0.2rem" }}>
+              Note: live provider model list unavailable ({modelsView.providerListError}). Showing catalog models only.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -274,6 +378,7 @@ function ModelParamPanel({
   palette: p,
   disabled,
   catalog,
+  effortOptions: effortOptionsProp,
 }: {
   model: string;
   modelFamily: ModelFamily | undefined;
@@ -287,10 +392,17 @@ function ModelParamPanel({
   disabled?: boolean;
   /** Active model catalog — live from BFF when available, static fallback otherwise. */
   catalog: CatalogProvider[];
+  /**
+   * Optional override for reasoning effort options — supplied by the caller
+   * when it already has the model's effort set from the integration model list
+   * (more precise than the static catalog). Falls back to catalog lookup when absent.
+   */
+  effortOptions?: string[];
 }) {
   if (modelFamily === "reasoning") {
-    // Per-model valid set; falls back to full set for unknown free-text models.
-    const effortOptions = getReasoningEfforts(model, catalog) ?? ["minimal", "low", "medium", "high"];
+    // Use caller-supplied effort set (from integration model list) when available;
+    // fall back to catalog lookup for free-text / catalog-only models.
+    const effortOptions = effortOptionsProp ?? getReasoningEfforts(model, catalog) ?? ["minimal", "low", "medium", "high"];
     return (
       <div style={{ flex: 2 }}>
         <label style={labelStyle()} for="bb-effort">
@@ -375,9 +487,9 @@ function EditableSkill({
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // #320 — live model catalog. Load once per api instance; use the static
-  // MODEL_CATALOG as the initial value so the picker is immediately usable
-  // while the fetch resolves. On failure the static catalog remains active.
+  // #320 — live model catalog. Load once per api instance; used as the fallback
+  // catalog when no integrations are configured and for the ModelParamPanel
+  // when the model family cannot be derived from the integration model list.
   const [catalog, setCatalog] = useState<CatalogProvider[]>(MODEL_CATALOG);
   // biome-ignore lint/correctness/useExhaustiveDependencies: load once per api instance
   useEffect(() => {
@@ -386,13 +498,89 @@ function EditableSkill({
     });
   }, [api]);
 
+  // #330 — integration-first picker state.
+  // `null` = not yet loaded; `[]` = loaded but none configured (triggers fallback).
+  const [integrations, setIntegrations] = useState<LlmIntegration[] | null>(null);
+  const [integrationsLoading, setIntegrationsLoading] = useState(true);
+  // `null` = no integration selected or not yet loaded.
+  const [modelsView, setModelsView] = useState<IntegrationModelsViewResponse | null>(null);
+  const [modelsLoading, setModelsLoading] = useState(false);
+
+  // Load the tenant's integrations once per api instance.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load once per api instance
+  useEffect(() => {
+    setIntegrationsLoading(true);
+    api
+      .listLlmIntegrations()
+      .then((list) => {
+        setIntegrations(list);
+        setIntegrationsLoading(false);
+      })
+      .catch(() => {
+        // On failure, treat as "no integrations" so the free-text fallback activates.
+        setIntegrations([]);
+        setIntegrationsLoading(false);
+      });
+  }, [api]);
+
+  // When the selected integration changes, fetch its model list.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — react to draft.llmIntegrationId
+  useEffect(() => {
+    if (!draft.llmIntegrationId) {
+      setModelsView(null);
+      return;
+    }
+    setModelsLoading(true);
+    api
+      .listIntegrationModels(draft.llmIntegrationId)
+      .then((view) => {
+        setModelsView(view);
+        setModelsLoading(false);
+      })
+      .catch(() => {
+        setModelsView(null);
+        setModelsLoading(false);
+      });
+  }, [api, draft.llmIntegrationId]);
+
   function set<K extends keyof EditDraft>(key: K, value: string) {
     setDraft((d) => ({ ...d, [key]: value }));
     setSaved(false);
   }
 
-  // Derive the model family for the current draft model — drives param panel.
-  const modelFamily = getModelFamily(draft.model, catalog);
+  // When the integration changes, reset the model selection (the new integration
+  // may not have the previously-selected model in its list).
+  function handleIntegrationChange(integrationId: string) {
+    setDraft((d) => ({ ...d, llmIntegrationId: integrationId, model: "" }));
+    setSaved(false);
+  }
+
+  // Derive the model family for the param panel.
+  // Priority: integration model list (precise) → static catalog (fallback).
+  function getModelFamilyForDraft(): ModelFamily | undefined {
+    if (draft.llmIntegrationId && modelsView) {
+      const found = modelsView.models.find((m) => m.id === draft.model);
+      if (found) return found.paramProfile as ModelFamily;
+    }
+    return getModelFamily(draft.model, catalog);
+  }
+
+  // Derive reasoning efforts for the selected model from the integration list
+  // (more precise than the static catalog's effort sets).
+  function getReasoningEffortsForDraft(): string[] | undefined {
+    if (draft.llmIntegrationId && modelsView) {
+      const found = modelsView.models.find((m) => m.id === draft.model);
+      if (found && found.paramProfile === "reasoning") {
+        return found.reasoningEfforts.length > 0
+          ? found.reasoningEfforts
+          : ["minimal", "low", "medium", "high"];
+      }
+      if (found && found.paramProfile === "sampling") return undefined;
+    }
+    return getReasoningEfforts(draft.model, catalog);
+  }
+
+  const modelFamily = getModelFamilyForDraft();
 
   // Validate the numeric fields against the contract's bounds before they can be
   // marked dirty / submitted (temperature 0–2; maxTokens a positive integer).
@@ -413,6 +601,10 @@ function EditableSkill({
       ? "Max tokens must be a positive integer."
       : null;
 
+  // Detail's server-side llmIntegrationId (additive runtime field).
+  const detailIntegrationId =
+    ((detail as unknown as { llmIntegrationId?: string | null }).llmIntegrationId) ?? "";
+
   // Diff the draft against the loaded detail; only changed (and VALID) fields are sent.
   function changedFields(): SkillStructuralUpdateRequest {
     const out: SkillStructuralUpdateRequest = {};
@@ -427,6 +619,12 @@ function EditableSkill({
       if (!maxInvalid && draft.maxTokens.trim() !== "" && maxNum !== detail.maxTokens) {
         out.maxTokens = maxNum;
       }
+    }
+    // #330 — always include integration binding when an integration is pinned
+    // OR when the user clears it (to send llmSource: "tenant_default").
+    if (draft.llmIntegrationId !== detailIntegrationId) {
+      out.llmIntegrationId = draft.llmIntegrationId || null;
+      out.llmSource = draft.llmIntegrationId ? "pinned" : "tenant_default";
     }
     return out;
   }
@@ -451,6 +649,10 @@ function EditableSkill({
       setSaving(false);
     }
   }
+
+  // Build reasoning effort options for the ModelParamPanel — prefer the
+  // integration model list's precise set; fall back to catalog.
+  const reasoningEffortOptions = getReasoningEffortsForDraft();
 
   return (
     <div style={{ marginTop: "0.5rem" }}>
@@ -501,33 +703,40 @@ function EditableSkill({
         style={inputStyle(p)}
       />
 
-      {/* Model picker + family-aware parameter panel (#302) */}
-      <div style={{ display: "flex", gap: "0.75rem" }}>
-        <div style={{ flex: 2 }}>
-          <label style={labelStyle()} for="bb-model">
-            Model
-          </label>
-          <ModelPicker
-            value={draft.model}
-            onChange={(v) => set("model", v)}
+      {/* #330 — Integration-first model picker + family-aware parameter panel */}
+      <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+        <div style={{ flex: 2, minWidth: "200px" }}>
+          <IntegrationModelPicker
+            integrationId={draft.llmIntegrationId}
+            model={draft.model}
+            onIntegrationChange={handleIntegrationChange}
+            onModelChange={(v) => set("model", v)}
             palette={p}
             disabled={saving}
+            integrations={integrations}
+            integrationsLoading={integrationsLoading}
+            modelsView={modelsView}
+            modelsLoading={modelsLoading}
             catalog={catalog}
           />
         </div>
-        <ModelParamPanel
-          model={draft.model}
-          modelFamily={modelFamily}
-          temperature={draft.temperature}
-          maxTokens={draft.maxTokens}
-          reasoningEffort={draft.reasoningEffort}
-          onTemperature={(v) => set("temperature", v)}
-          onMaxTokens={(v) => set("maxTokens", v)}
-          onReasoningEffort={(v) => set("reasoningEffort", v)}
-          palette={p}
-          disabled={saving}
-          catalog={catalog}
-        />
+        {/* Only show param panel when a model is selected or we're in fallback (no integration) */}
+        {(draft.model || (!draft.llmIntegrationId && !integrationsLoading)) && (
+          <ModelParamPanel
+            model={draft.model}
+            modelFamily={modelFamily}
+            temperature={draft.temperature}
+            maxTokens={draft.maxTokens}
+            reasoningEffort={draft.reasoningEffort}
+            onTemperature={(v) => set("temperature", v)}
+            onMaxTokens={(v) => set("maxTokens", v)}
+            onReasoningEffort={(v) => set("reasoningEffort", v)}
+            palette={p}
+            disabled={saving}
+            catalog={catalog}
+            effortOptions={reasoningEffortOptions}
+          />
+        )}
       </div>
 
       {numericError && (

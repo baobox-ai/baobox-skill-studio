@@ -123,6 +123,19 @@ export const skillStudioRoutes = {
     path: "/skills/:id/role-models",
     build: (id: string): string => `/skills/${enc(id)}/role-models`,
   },
+  // #330 — integration-first model picker. The tenant's configured LLM
+  // integrations are enumerated here so the picker can list them; then models
+  // for a specific integration are fetched by id. Both delegate to the SDK's
+  // `client.llmIntegrations.list/listModels` — API-safe (no real credentials).
+  listLlmIntegrations: {
+    method: "GET",
+    path: "/llm-integrations",
+  },
+  listIntegrationModels: {
+    method: "GET",
+    path: "/llm-integrations/:id/models",
+    build: (id: string): string => `/llm-integrations/${enc(id)}/models`,
+  },
 } as const;
 
 export type SkillStudioRoutes = typeof skillStudioRoutes;
