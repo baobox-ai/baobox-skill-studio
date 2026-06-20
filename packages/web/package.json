@@ -1,6 +1,6 @@
 {
   "name": "@baobox/skill-builder",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Framework-agnostic <baobox-skill-builder> Web Component for the BaoBox Skill Studio. Reads from a configurable api-base (the tenant BFF) via @baobox/skill-builder-contract.",
   "license": "MIT",
   "author": "Bright Qi <bright@adoptive.co>",
@@ -47,7 +47,7 @@
     "prepublishOnly": "npm run clean && npm run build && npm test"
   },
   "dependencies": {
-    "@baobox/skill-builder-contract": "^0.6.0",
+    "@baobox/skill-builder-contract": "^0.7.0",
     "preact": "^10.24.0"
   },
   "peerDependencies": {
