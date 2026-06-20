@@ -440,9 +440,8 @@ contract as `SkillRoleModelsMap`).
 Replaces the model chain for **one role** on a skill. Requires `skills:write`.
 The `authz` hook sees `op="putRoleModels"` with `skillId`. Chain is an ordered
 array of up to 4 entries; an empty array clears the role (inherits tenant
-default). In the Studio scope, `llmIntegrationId` is always `null` and
-`llmSource` is `"pinned"` (catalog-model-only; per-integration pinning is a
-documented follow-up).
+default). In the Studio scope, `llmIntegrationId` may be `null` (catalog model, `llmSource: "pinned"`)
+or an integration id returned by `GET /llm-integrations` (see #330 below).
 
 ```jsonc
 // PUT /skills/sk_abc/role-models
@@ -468,6 +467,73 @@ documented follow-up).
 `eval_judge` is not exposed in the Studio UI (judge configuration is a
 platform-level concern). The BFF and contract types include it for API
 completeness.
+
+#### `GET /llm-integrations` → `{ data: LlmIntegration[] }` (#330)
+
+Returns the tenant's configured LLM integrations. The `authz` hook sees
+`op="listLlmIntegrations"` with `tenantId` only (no `skillId`). This is a
+read-only, tenant-scoped call — the credential never leaves the BFF.
+
+```ts
+interface LlmIntegration {
+  id: string;           // opaque integration id — pass as llmIntegrationId
+  displayName: string;  // e.g. "OpenAI (tenant)"
+  provider: string;     // e.g. "openai"
+  defaultModel: string; // provider's default for this integration
+  isDefault: boolean;   // true for the tenant's default integration
+  apiKeyMask: string;   // last-4 of the API key, safe to display
+}
+```
+
+An empty array (`[]`) means the tenant has no configured integrations — the
+Studio falls back to the free-text catalog model input automatically.
+
+#### `GET /llm-integrations/:id/models` → `IntegrationModelsViewResponse` (#330)
+
+Returns the live model list for a specific integration. The `:id` is
+URL-encoded. The `authz` hook sees `op="listIntegrationModels"` with `tenantId`.
+
+```ts
+interface IntegrationModelsViewResponse {
+  integrationId: string;
+  provider: string;
+  models: IntegrationModel[];
+  providerListError: string | null;  // non-null = provider API soft failure
+}
+
+interface IntegrationModel {
+  id: string;
+  displayName: string;
+  source: string;          // "provider" | "catalog"
+  paramProfile: string;    // "sampling" | "reasoning"
+  reasoningEfforts: string[];
+  pricing: unknown | null;
+}
+```
+
+When `providerListError` is non-null the BFF returns HTTP 200 with an empty
+`models` array and the error note; the Studio surfaces it as a soft warning so
+the user can still type a model id manually.
+
+**Integration-first save flow (#330):** When an integration is selected and a
+model is chosen, `updateSkillStructural` (`PUT /skills/:id`) receives:
+
+```jsonc
+{
+  "llmIntegrationId": "int_openai",   // the chosen integration id
+  "model": "openai/gpt-4o",           // the chosen model id
+  "llmSource": "pinned"               // always "pinned" when an integration is set
+}
+```
+
+Clearing the integration (back to "Use tenant default") sends:
+
+```jsonc
+{
+  "llmIntegrationId": null,
+  "llmSource": "tenant_default"
+}
+```
 
 #### `POST /skills/:id/tools` → `{ data: { attached: true } }`
 
@@ -813,3 +879,8 @@ Phase 2 completes the orchestrator authoring surface. Downstream:
   bff 0.3 / web 0.2), wiring the real `authz`, `audit`, `onMutation` (drift →
   promote-back) and `parameters` host store (honoring the empty-secret convention).
 - **UAT (#262)** validates the end-to-end tenant authoring flow.
+- **#330 (integration-first model picker)** — landed in contract 0.6.0 / bff 0.7.0 /
+  web 0.6.0 (sdk ≥ 0.21.0). Hosts that configure `hooks.authz` to allow
+  `listLlmIntegrations` and `listIntegrationModels` will surface the integration
+  picker in the Studio. Hosts that deny or omit these ops get the free-text
+  catalog fallback automatically.

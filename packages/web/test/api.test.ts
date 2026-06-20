@@ -246,4 +246,96 @@ describe("createApi — Phase 2 authoring", () => {
     );
     await expect(api.listModels()).rejects.toMatchObject({ status: 401, code: "upstream_error" });
   });
+
+  it("listLlmIntegrations GETs {base}/llm-integrations and unwraps data (#330)", async () => {
+    const seen: { url?: string; method?: string } = {};
+    const integration = { id: "int_openai", displayName: "OpenAI (tenant)", provider: "openai", defaultModel: "openai/gpt-4o", isDefault: true, apiKeyMask: "sk-...abc" };
+    const api = createApi(
+      "/bff",
+      fakeFetch((url, init) => {
+        seen.url = url;
+        seen.method = init.method;
+        return json(200, { data: [integration] });
+      }),
+    );
+    const integrations = await api.listLlmIntegrations();
+    expect(seen.url).toBe("/bff/llm-integrations");
+    expect(seen.method).toBe("GET");
+    expect(integrations).toHaveLength(1);
+    expect(integrations[0]?.id).toBe("int_openai");
+  });
+
+  it("listLlmIntegrations returns an empty array when the tenant has no integrations", async () => {
+    const api = createApi(
+      "/bff",
+      fakeFetch(() => json(200, { data: [] })),
+    );
+    const integrations = await api.listLlmIntegrations();
+    expect(integrations).toEqual([]);
+  });
+
+  it("listLlmIntegrations throws SkillStudioApiError on non-2xx", async () => {
+    const api = createApi(
+      "/bff",
+      fakeFetch(() => json(403, { error: { code: "forbidden", message: "key lacks grant" } })),
+    );
+    await expect(api.listLlmIntegrations()).rejects.toMatchObject({ status: 403, code: "forbidden" });
+  });
+
+  it("listIntegrationModels GETs {base}/llm-integrations/:id/models (URL-encoded) (#330)", async () => {
+    const seen: { url?: string; method?: string } = {};
+    const view = {
+      integrationId: "int_openai",
+      provider: "openai",
+      models: [
+        { id: "openai/gpt-4o", displayName: "GPT-4o", source: "provider", paramProfile: "sampling", reasoningEfforts: null, pricing: null },
+      ],
+      providerListError: null,
+    };
+    const api = createApi(
+      "/bff",
+      fakeFetch((url, init) => {
+        seen.url = url;
+        seen.method = init.method;
+        return json(200, view);
+      }),
+    );
+    const result = await api.listIntegrationModels("int_openai");
+    expect(seen.url).toBe("/bff/llm-integrations/int_openai/models");
+    expect(seen.method).toBe("GET");
+    expect(result.integrationId).toBe("int_openai");
+    expect(result.models).toHaveLength(1);
+  });
+
+  it("listIntegrationModels URL-encodes a slash in the integrationId", async () => {
+    let url = "";
+    const api = createApi(
+      "/bff",
+      fakeFetch((u) => {
+        url = u;
+        return json(200, { integrationId: "int/x", provider: "p", models: [], providerListError: null });
+      }),
+    );
+    await api.listIntegrationModels("int/x");
+    expect(url).toBe("/bff/llm-integrations/int%2Fx/models");
+  });
+
+  it("listIntegrationModels surfaces providerListError in the response body", async () => {
+    const api = createApi(
+      "/bff",
+      fakeFetch(() =>
+        json(200, { integrationId: "int_openai", provider: "openai", models: [], providerListError: "provider API unreachable" }),
+      ),
+    );
+    const result = await api.listIntegrationModels("int_openai");
+    expect(result.providerListError).toBe("provider API unreachable");
+  });
+
+  it("listIntegrationModels throws SkillStudioApiError on non-2xx", async () => {
+    const api = createApi(
+      "/bff",
+      fakeFetch(() => json(404, { error: { code: "not_found", message: "integration not found" } })),
+    );
+    await expect(api.listIntegrationModels("int_bad")).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
 });

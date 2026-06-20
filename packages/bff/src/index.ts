@@ -16,6 +16,9 @@ import {
   skillUpdateRequestSchema,
   toSkillSummary,
 } from "@baobox/skill-builder-contract";
+// #330 — LlmIntegration / IntegrationModelsView are SDK types re-exported from
+// the contract; import directly for BFF response typing.
+import type { IntegrationModelsView, LlmIntegration } from "@baobox/sdk";
 import { type Context, Hono } from "hono";
 import type {
   AuditRecord,
@@ -644,6 +647,38 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
       return c.json({ data: result });
     } catch (err) {
       return respondError(c, err, "setParameters", { skillId: id });
+    }
+  });
+
+  // GET /llm-integrations → { data: LlmIntegration[] } (#330)
+  // Returns the tenant's configured LLM integrations. API-safe — no real
+  // credentials; `apiKeyMask` is always `"***"`. The `authz` hook sees
+  // op="listLlmIntegrations" with no skillId (tenant-level, not skill-scoped).
+  app.get("/llm-integrations", async (c) => {
+    try {
+      await authorize("listLlmIntegrations");
+      const integrations: LlmIntegration[] = await client.llmIntegrations.list({ tenantId });
+      await audit({ op: "listLlmIntegrations", tenantId, outcome: "allowed" });
+      return c.json({ data: integrations });
+    } catch (err) {
+      return respondError(c, err, "listLlmIntegrations");
+    }
+  });
+
+  // GET /llm-integrations/:id/models → IntegrationModelsView (#330)
+  // Returns the live model list for a specific integration. `providerListError`
+  // is non-null when the provider list fetch failed — the Web Component surfaces
+  // this as a soft note and still shows any catalog models. The `authz` hook
+  // sees op="listIntegrationModels" with no skillId.
+  app.get("/llm-integrations/:id/models", async (c) => {
+    const id = c.req.param("id");
+    try {
+      await authorize("listIntegrationModels");
+      const view: IntegrationModelsView = await client.llmIntegrations.listModels(id, { tenantId });
+      await audit({ op: "listIntegrationModels", tenantId, outcome: "allowed" });
+      return c.json(view);
+    } catch (err) {
+      return respondError(c, err, "listIntegrationModels");
     }
   });
 

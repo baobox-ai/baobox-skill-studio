@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { describe, expect, it, vi } from "vitest";
-import type { SkillDetail, SkillStudioApi } from "../src/api.js";
+import type { IntegrationModelsViewResponse, SkillDetail, SkillStudioApi } from "../src/api.js";
 import { registerSkillBuilder } from "../src/element.js";
 import { SkillStudio } from "../src/SkillStudio.js";
 import { MODEL_CATALOG, getReasoningEfforts } from "../src/modelCatalog.js";
@@ -53,6 +53,16 @@ function mockApi(over: Partial<SkillStudioApi> = {}): SkillStudioApi {
       eval_judge: [],
     })),
     putRoleModels: vi.fn(async () => ({})),
+    // #330 — integration-first model picker. Default to empty list so the picker
+    // falls back to the free-text catalog model input (preserves existing model
+    // picker test expectations — tests that exercise integrations supply their own).
+    listLlmIntegrations: vi.fn(async () => []),
+    listIntegrationModels: vi.fn(async () => ({
+      integrationId: "",
+      provider: "",
+      models: [],
+      providerListError: null,
+    })),
     ...over,
   };
 }
@@ -406,5 +416,170 @@ describe("<SkillStudio> model picker", () => {
     expect(screen.getByLabelText("Temperature")).toBeTruthy();
     expect(screen.getByLabelText("Max Tokens")).toBeTruthy();
     expect(screen.queryByLabelText("Reasoning Effort")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration-first model picker (#330)
+// ---------------------------------------------------------------------------
+describe("<SkillStudio> integration-first model picker (#330)", () => {
+  const INTEGRATION = {
+    id: "int_openai",
+    displayName: "OpenAI (tenant)",
+    provider: "openai",
+    defaultModel: "openai/gpt-4o",
+    isDefault: true,
+    apiKeyMask: "sk-...abc",
+  };
+
+  const MODELS_VIEW: IntegrationModelsViewResponse = {
+    integrationId: "int_openai",
+    provider: "openai",
+    models: [
+      { id: "openai/gpt-4o", displayName: "GPT-4o", source: "provider", paramProfile: "sampling", reasoningEfforts: [], pricing: null },
+      { id: "openai/gpt-5", displayName: "GPT-5", source: "provider", paramProfile: "reasoning", reasoningEfforts: ["minimal", "low", "medium", "high"], pricing: null },
+    ],
+    providerListError: null,
+  };
+
+  it("shows the LLM integration selector when the tenant has integrations", async () => {
+    const api = mockApi({
+      listLlmIntegrations: vi.fn(async () => [INTEGRATION]),
+      listIntegrationModels: vi.fn(async () => MODELS_VIEW),
+    });
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+
+    // Integration dropdown should appear and eventually be enabled (loaded)
+    const integrationSelect = (await screen.findByLabelText("LLM integration")) as HTMLSelectElement;
+    await waitFor(() => expect(integrationSelect.disabled).toBe(false));
+    expect(integrationSelect).toBeTruthy();
+    // Free-text model input must NOT be visible (picker takes over)
+    // (model select only appears after choosing an integration)
+    expect(screen.queryByRole("note", { name: /No LLM integrations/i })).toBeNull();
+  });
+
+  it("picks an integration → shows model dropdown → selecting model marks save dirty", async () => {
+    const listIntegrationModels = vi.fn(async () => MODELS_VIEW);
+    const api = mockApi({
+      listLlmIntegrations: vi.fn(async () => [INTEGRATION]),
+      listIntegrationModels,
+    });
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+
+    // Wait for integration select to load (not disabled)
+    const integrationSelect = (await screen.findByLabelText("LLM integration")) as HTMLSelectElement;
+    await waitFor(() => expect(integrationSelect.disabled).toBe(false));
+
+    // Select the integration
+    fireEvent.change(integrationSelect, { target: { value: "int_openai" } });
+
+    // Model dropdown should appear after integration is selected
+    const modelSelect = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    expect(modelSelect.tagName).toBe("SELECT");
+
+    // Select a model
+    fireEvent.change(modelSelect, { target: { value: "openai/gpt-4o" } });
+
+    // Save button should be enabled (dirty)
+    await waitFor(() => {
+      const saveBtn = screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement;
+      expect(saveBtn.disabled).toBe(false);
+    });
+  });
+
+  it("save sends llmIntegrationId + model + llmSource='pinned' to updateSkillStructural", async () => {
+    const updateSkillStructural = vi.fn(async (_id: string, body: unknown) => ({ ...detail, ...(body as object) }));
+    const api = mockApi({
+      listLlmIntegrations: vi.fn(async () => [INTEGRATION]),
+      listIntegrationModels: vi.fn(async () => MODELS_VIEW),
+      updateSkillStructural,
+    });
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+
+    // Select the integration — wait for it to be enabled first
+    const integrationSelect = (await screen.findByLabelText("LLM integration")) as HTMLSelectElement;
+    await waitFor(() => expect(integrationSelect.disabled).toBe(false));
+    fireEvent.change(integrationSelect, { target: { value: "int_openai" } });
+
+    // Wait for and select a model
+    const modelSelect = (await screen.findByLabelText("Model")) as HTMLSelectElement;
+    await waitFor(() => expect(modelSelect.disabled).toBe(false));
+    fireEvent.change(modelSelect, { target: { value: "openai/gpt-4o" } });
+
+    // Wait for Save to become enabled then click
+    const saveBtn = await screen.findByRole("button", { name: "Save changes" });
+    await waitFor(() => expect((saveBtn as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => expect(updateSkillStructural).toHaveBeenCalledTimes(1));
+    const [, payload] = updateSkillStructural.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.llmIntegrationId).toBe("int_openai");
+    expect(payload.llmSource).toBe("pinned");
+  });
+
+  it("clearing integration (back to sentinel) sends llmIntegrationId=null + llmSource='tenant_default'", async () => {
+    // Skill already has an integration set on the server
+    const detailWithIntegration = {
+      ...detail,
+      llmIntegrationId: "int_openai",
+    };
+    const updateSkillStructural = vi.fn(async (_id: string, body: unknown) => ({ ...detailWithIntegration, ...(body as object) }));
+    const api = mockApi({
+      getSkill: vi.fn(async () => detailWithIntegration as unknown as typeof detail),
+      listLlmIntegrations: vi.fn(async () => [INTEGRATION]),
+      listIntegrationModels: vi.fn(async () => MODELS_VIEW),
+      updateSkillStructural,
+    });
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+
+    // Integration select should be pre-selected to "int_openai"
+    const integrationSelect = (await screen.findByLabelText("LLM integration")) as HTMLSelectElement;
+    await waitFor(() => expect(integrationSelect.disabled).toBe(false));
+
+    // Clear back to sentinel ("")
+    fireEvent.change(integrationSelect, { target: { value: "" } });
+
+    // Save — wait for dirty then click
+    const saveBtn = await screen.findByRole("button", { name: "Save changes" });
+    await waitFor(() => expect((saveBtn as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(saveBtn);
+
+    await waitFor(() => expect(updateSkillStructural).toHaveBeenCalledTimes(1));
+    const [, payload] = updateSkillStructural.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.llmIntegrationId).toBeNull();
+    expect(payload.llmSource).toBe("tenant_default");
+  });
+
+  it("shows a providerListError soft note when the provider list call fails", async () => {
+    const brokenView = { ...MODELS_VIEW, models: [], providerListError: "provider API unreachable" };
+    const api = mockApi({
+      listLlmIntegrations: vi.fn(async () => [INTEGRATION]),
+      listIntegrationModels: vi.fn(async () => brokenView),
+    });
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+
+    const integrationSelect = (await screen.findByLabelText("LLM integration")) as HTMLSelectElement;
+    await waitFor(() => expect(integrationSelect.disabled).toBe(false));
+    fireEvent.change(integrationSelect, { target: { value: "int_openai" } });
+
+    // Error note should appear in the model picker area
+    await screen.findByText(/provider API unreachable/i);
+  });
+
+  it("falls back to free-text catalog model input when no integrations are configured", async () => {
+    // Default mockApi already returns [] for listLlmIntegrations
+    render(<SkillStudio apiBase="/bff" api={mockApi()} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+
+    // Free-text model input should appear (fallback)
+    const modelInput = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    expect(modelInput.tagName).toBe("INPUT");
+    // Note about no integrations should be visible
+    await screen.findByText(/No LLM integrations configured/i);
   });
 });
