@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+Align `@baobox/sdk` to `^0.22.0`. No contract surface change — the re-exported
+SDK types are identical; this keeps the dependency from pulling a stale nested
+SDK into BFF/web clean installs.
+
 ## 0.2.1
 
 Model-aware reasoning effort (#11 / #302). **Additive, backward compatible.**

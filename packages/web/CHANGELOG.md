@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0
+
+Stop eagerly fetching the global model catalog on the skill page. The
+integration-first picker (#330) provides per-integration models + paramProfiles
+for the primary flow, and the bundled static catalog covers the
+ModelParamPanel family/effort fallback and the no-integrations free-text case.
+Removes one request per skill page and the 500 it produced for off-box (apiKey)
+BFFs. Depends on contract `^0.7.0`.
+
 ## 0.2.1
 
 Model-aware model picker + reasoning effort (#11 / #302).

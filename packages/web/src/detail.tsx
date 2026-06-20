@@ -14,7 +14,6 @@ import {
   type CatalogProvider,
   type ModelFamily,
   MODEL_CATALOG,
-  fetchModelCatalog,
   getModelFamily,
   getReasoningEfforts,
 } from "./modelCatalog.js";
@@ -487,16 +486,14 @@ function EditableSkill({
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // #320 — live model catalog. Load once per api instance; used as the fallback
-  // catalog when no integrations are configured and for the ModelParamPanel
-  // when the model family cannot be derived from the integration model list.
-  const [catalog, setCatalog] = useState<CatalogProvider[]>(MODEL_CATALOG);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: load once per api instance
-  useEffect(() => {
-    fetchModelCatalog(api).then((live) => {
-      if (live) setCatalog(live);
-    });
-  }, [api]);
+  // #330 — model catalog for the ModelParamPanel family/effort fallback and the
+  // no-integrations free-text case. The integration-first picker provides
+  // per-integration models + paramProfiles for the primary flow, so we no
+  // longer eagerly fetch the live global catalog on skill-page load: it added a
+  // request per page and 500'd for off-box (apiKey) BFFs whose SDK couldn't
+  // reach the adminSecret-gated catalog. The bundled static catalog is the
+  // fallback (the live one only ever *upgraded* it).
+  const catalog: CatalogProvider[] = MODEL_CATALOG;
 
   // #330 — integration-first picker state.
   // `null` = not yet loaded; `[]` = loaded but none configured (triggers fallback).

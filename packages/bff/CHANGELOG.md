@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+Depend on `@baobox/sdk` `^0.22.0` (+ contract `^0.7.0`). Fixes the skill page's
+auto-loaded model-catalog (`/models`) and tool-list (`/tools`) calls returning
+**500** for apiKey BFFs: SDK 0.22.0 routes `catalog.list()` + `tools.list()`
+through the apiKey-compatible request path, and the backend exposes the tool
+list to a tenant apiKey (own + global). No BFF code change.
+
 ## 0.3.0
 
 Phase-2 authoring surface + git-truth mutation hook (#259).
