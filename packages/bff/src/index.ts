@@ -682,6 +682,76 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
     }
   });
 
+  // -------------------------------------------------------------------------
+  // ED-2 (#433) — Incoming skill drafts (External Dreamer, review-gated).
+  //
+  // These two routes proxy to the BaoBox admin API, which is gated by
+  // `adminSecret`. The BFF already holds `config.endpoint` and either
+  // `config.adminSecret` or `config.apiKey`; only an `adminSecret`-configured
+  // BFF can reach these routes (an apiKey-only BFF will receive a 401/403
+  // from BaoBox and surface it as an `upstream_error` to the web layer).
+  //
+  // Auth on the BFF side: `authz` hook sees op="listDrafts" / "approveDraft"
+  // (no skillId — tenant-level). The hook controls who in the studio UI can
+  // see/action drafts. Fail-closed default still applies.
+  // -------------------------------------------------------------------------
+
+  // The credential to send on admin calls: prefer adminSecret, fall back to
+  // apiKey (which the BaoBox admin endpoint will 401 for — surfaced upstream).
+  const baoboxEndpoint = config.endpoint.replace(/\/+$/, "");
+  const adminAuthHeader =
+    typeof config.adminSecret === "string" && config.adminSecret.trim()
+      ? `Bearer ${config.adminSecret}`
+      : typeof config.apiKey === "string" && config.apiKey.trim()
+        ? `Bearer ${config.apiKey}`
+        : "";
+  const doAdminFetch = config.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init));
+
+  // GET /drafts?tenantId=<id> → { data: { drafts: [...] } }
+  // Proxies to GET /api/v1/admin/skills/drafts?tenantId=<id> on BaoBox.
+  app.get("/drafts", async (c) => {
+    try {
+      await authorize("listDrafts");
+      const upstream = `${baoboxEndpoint}/api/v1/admin/skills/drafts?tenantId=${encodeURIComponent(tenantId)}`;
+      const res = await doAdminFetch(upstream, {
+        method: "GET",
+        headers: { Authorization: adminAuthHeader, Accept: "application/json" },
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        const err = (body as { error?: { code?: string; message?: string } }).error ?? {};
+        throw new BaoBoxError(res.status, err.code ?? "upstream_error", err.message ?? `${res.status}`, null, body);
+      }
+      await audit({ op: "listDrafts", tenantId, outcome: "allowed" });
+      return c.json(body);
+    } catch (err) {
+      return respondError(c, err, "listDrafts");
+    }
+  });
+
+  // POST /drafts/:versionId/approve → { data: { versionId, skillId, reviewState, versionStatus, skillStatus } }
+  // Proxies to POST /api/v1/admin/skills/drafts/:versionId/approve on BaoBox.
+  app.post("/drafts/:versionId/approve", async (c) => {
+    const versionId = c.req.param("versionId");
+    try {
+      await authorize("approveDraft");
+      const upstream = `${baoboxEndpoint}/api/v1/admin/skills/drafts/${encodeURIComponent(versionId)}/approve`;
+      const res = await doAdminFetch(upstream, {
+        method: "POST",
+        headers: { Authorization: adminAuthHeader, Accept: "application/json", "Content-Type": "application/json" },
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        const err = (body as { error?: { code?: string; message?: string } }).error ?? {};
+        throw new BaoBoxError(res.status, err.code ?? "upstream_error", err.message ?? `${res.status}`, null, body);
+      }
+      await audit({ op: "approveDraft", tenantId, outcome: "allowed" });
+      return c.json(body);
+    } catch (err) {
+      return respondError(c, err, "approveDraft");
+    }
+  });
+
   // Shared 400 path for a request-body schema failure. Uses the contract's
   // stable `validation_error` code (the Web Component branches on it).
   function validationError(

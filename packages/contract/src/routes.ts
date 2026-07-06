@@ -136,6 +136,18 @@ export const skillStudioRoutes = {
     path: "/llm-integrations/:id/models",
     build: (id: string): string => `/llm-integrations/${enc(id)}/models`,
   },
+  // ED-2 (#433) — Incoming skill drafts (admin-only, External Dreamer intake).
+  // The BFF proxies these to the BaoBox admin API. The web surface is available
+  // to any authenticated studio session (authz lives server-side on the BFF).
+  listDrafts: {
+    method: "GET",
+    path: "/drafts",
+  },
+  approveDraft: {
+    method: "POST",
+    path: "/drafts/:versionId/approve",
+    build: (versionId: string): string => `/drafts/${enc(versionId)}/approve`,
+  },
 } as const;
 
 export type SkillStudioRoutes = typeof skillStudioRoutes;

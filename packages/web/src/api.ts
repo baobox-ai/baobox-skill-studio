@@ -1,9 +1,11 @@
 import {
+  type ApproveDraftResponse,
   type AttachAckResponse,
   type DetachAckResponse,
   type IntegrationModelsViewResponse,
   type ListAttachedSkillsResponse,
   type ListAvailableToolsResponse,
+  type ListDraftsResponse,
   type ListLlmIntegrationsResponse,
   type ListSkillsResponse,
   type ListSkillToolsResponse,
@@ -13,6 +15,7 @@ import {
   type SkillCreateRequest,
   type SkillDetail as ContractSkillDetail,
   type SkillDetailResponse,
+  type SkillDraft,
   type SkillParameter,
   type SkillRoleModelsMap,
   type SkillStructuralUpdateRequest,
@@ -23,11 +26,14 @@ import {
 } from "@baobox/skill-builder-contract";
 
 export type {
+  ApproveDraftResponse,
   IntegrationModelsViewResponse,
+  ListDraftsResponse,
   LlmIntegration,
   ModelCatalogResponse,
   PutRoleModelsRequest,
   SkillCreateRequest,
+  SkillDraft,
   SkillParameter,
   SkillRoleModelsMap,
   SkillStructuralUpdateRequest,
@@ -102,6 +108,11 @@ export interface SkillStudioApi {
   listLlmIntegrations(): Promise<LlmIntegration[]>;
   /** Return the live model list for a specific integration (`GET /llm-integrations/:id/models`). */
   listIntegrationModels(integrationId: string): Promise<IntegrationModelsViewResponse>;
+  // ED-2 (#433) — Incoming skill drafts (External Dreamer, review-gated).
+  /** Return pending skill drafts for the tenant (`GET /drafts`). */
+  listDrafts(): Promise<SkillDraft[]>;
+  /** Approve a pending draft version (`POST /drafts/:versionId/approve`). */
+  approveDraft(versionId: string): Promise<ApproveDraftResponse["data"]>;
 }
 
 type FetchFn = typeof globalThis.fetch;
@@ -284,6 +295,20 @@ export function createApi(apiBase: string, fetchImpl?: FetchFn): SkillStudioApi 
         skillStudioRoutes.listIntegrationModels.method,
         skillStudioRoutes.listIntegrationModels.build(integrationId),
       );
+    },
+    async listDrafts() {
+      const body = await request<ListDraftsResponse>(
+        skillStudioRoutes.listDrafts.method,
+        skillStudioRoutes.listDrafts.path,
+      );
+      return body.data.drafts;
+    },
+    async approveDraft(versionId) {
+      const body = await request<ApproveDraftResponse>(
+        skillStudioRoutes.approveDraft.method,
+        skillStudioRoutes.approveDraft.build(versionId),
+      );
+      return body.data;
     },
   };
 }

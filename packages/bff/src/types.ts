@@ -18,7 +18,8 @@ export type SkillStudioReadOp =
   | "listModels" // #320 — live LLM model catalog via GET /models
   | "getRoleModels" // #328 — per-role guard model config via GET /skills/:id/role-models
   | "listLlmIntegrations" // #330 — tenant's configured LLM integrations
-  | "listIntegrationModels"; // #330 — models for a specific integration
+  | "listIntegrationModels" // #330 — models for a specific integration
+  | "listDrafts"; // ED-2 (#433) — incoming skill drafts (External Dreamer)
 
 /**
  * Structural mutations. Each one funnels through `authz` (before the write) and,
@@ -34,7 +35,8 @@ export type SkillStudioMutationOp =
   | "attachTool"
   | "detachTool"
   | "setParameters"
-  | "putRoleModels"; // #328 — per-role guard model config via PUT /skills/:id/role-models
+  | "putRoleModels" // #328 — per-role guard model config via PUT /skills/:id/role-models
+  | "approveDraft"; // ED-2 (#433) — approve a pending skill draft
 
 export type SkillStudioOp = SkillStudioReadOp | SkillStudioMutationOp;
 

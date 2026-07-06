@@ -63,6 +63,15 @@ function mockApi(over: Partial<SkillStudioApi> = {}): SkillStudioApi {
       models: [],
       providerListError: null,
     })),
+    // ED-2 (#433) — incoming skill drafts. Default to empty list.
+    listDrafts: vi.fn(async () => []),
+    approveDraft: vi.fn(async () => ({
+      versionId: "",
+      skillId: "",
+      reviewState: "approved",
+      versionStatus: "active",
+      skillStatus: "active",
+    })),
     ...over,
   };
 }
