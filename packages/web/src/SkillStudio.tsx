@@ -6,6 +6,7 @@ import {
   type SkillSummary,
 } from "./api.js";
 import { SkillDetailView } from "./detail.js";
+import { IncomingDrafts } from "./drafts.js";
 import { resolvePalette, THEME_STYLE, type ThemeName } from "./theme.js";
 import { ghostBtn, inputStyle, labelStyle, linkBtn, msgOf, primaryBtn } from "./ui.js";
 
@@ -18,7 +19,10 @@ export interface SkillStudioProps {
   api?: SkillStudioApi;
 }
 
-type View = { kind: "list" } | { kind: "create" } | { kind: "detail"; id: string };
+type View = { kind: "list" } | { kind: "create" } | { kind: "detail"; id: string } | { kind: "drafts" };
+
+// Top-level navigation tabs.
+type Tab = "skills" | "drafts";
 
 export function SkillStudio({ apiBase, theme = "light", api: injectedApi }: SkillStudioProps) {
   // Refuse to construct a client without a base — createApi would throw, and we
@@ -37,6 +41,13 @@ export function SkillStudio({ apiBase, theme = "light", api: injectedApi }: Skil
   };
 
   const [view, setView] = useState<View>({ kind: "list" });
+  const [tab, setTab] = useState<Tab>("skills");
+
+  // When switching tabs, reset the skills view to the list.
+  function switchTab(t: Tab) {
+    setTab(t);
+    if (t === "skills") setView({ kind: "list" });
+  }
 
   if (!api) {
     return (
@@ -52,7 +63,62 @@ export function SkillStudio({ apiBase, theme = "light", api: injectedApi }: Skil
   return (
     <div style={wrap}>
       <style>{THEME_STYLE}</style>
-      {view.kind === "detail" && (
+
+      {/* Tab bar */}
+      <div
+        role="tablist"
+        style={{
+          display: "flex",
+          gap: "0",
+          borderBottom: `2px solid ${p.border}`,
+          marginBottom: "1rem",
+        }}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "skills"}
+          onClick={() => switchTab("skills")}
+          style={{
+            background: "none",
+            border: "none",
+            borderBottom: tab === "skills" ? `2px solid ${p.accent}` : "2px solid transparent",
+            marginBottom: "-2px",
+            padding: "0.4rem 0.9rem",
+            fontWeight: tab === "skills" ? 600 : 400,
+            color: tab === "skills" ? p.accent : p.fg,
+            cursor: "pointer",
+            font: "inherit",
+            fontSize: "0.9rem",
+          }}
+        >
+          Skills
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "drafts"}
+          onClick={() => switchTab("drafts")}
+          style={{
+            background: "none",
+            border: "none",
+            borderBottom: tab === "drafts" ? `2px solid ${p.accent}` : "2px solid transparent",
+            marginBottom: "-2px",
+            padding: "0.4rem 0.9rem",
+            fontWeight: tab === "drafts" ? 600 : 400,
+            color: tab === "drafts" ? p.accent : p.fg,
+            cursor: "pointer",
+            font: "inherit",
+            fontSize: "0.9rem",
+          }}
+        >
+          Incoming drafts
+        </button>
+      </div>
+
+      {tab === "drafts" && <IncomingDrafts api={api} palette={p} />}
+
+      {tab === "skills" && view.kind === "detail" && (
         <SkillDetailView
           api={api}
           palette={p}
@@ -61,7 +127,7 @@ export function SkillStudio({ apiBase, theme = "light", api: injectedApi }: Skil
           onOpen={(id) => setView({ kind: "detail", id })}
         />
       )}
-      {view.kind === "create" && (
+      {tab === "skills" && view.kind === "create" && (
         <CreateSkillWizard
           api={api}
           palette={p}
@@ -69,7 +135,7 @@ export function SkillStudio({ apiBase, theme = "light", api: injectedApi }: Skil
           onCreated={(id) => setView({ kind: "detail", id })}
         />
       )}
-      {view.kind === "list" && (
+      {tab === "skills" && view.kind === "list" && (
         <SkillList
           api={api}
           palette={p}
