@@ -563,3 +563,48 @@ const _sdkIntegrationModelsGuard = (v: IntegrationModelsView): {
   providerListError: string | null;
 } => v;
 void _sdkIntegrationModelsGuard;
+
+// ---------------------------------------------------------------------------
+// ED-2 (#433) — Incoming skill drafts (External Dreamer intake, review-gated).
+//
+// The BFF proxies two admin-auth endpoints from BaoBox:
+//   GET  /api/v1/admin/skills/drafts?tenantId=<id>  → { data: { drafts: [...] } }
+//   POST /api/v1/admin/skills/drafts/:versionId/approve → { data: { ... } }
+//
+// These types are the BFF↔Web contract; they mirror the BaoBox wire shapes
+// exactly so the proxy layer is zero-transform.
+// ---------------------------------------------------------------------------
+
+export const skillDraftSchema = z.object({
+  version_id: z.string(),
+  skill_id: z.string(),
+  skill_name: z.string(),
+  version_label: z.string(),
+  review_state: z.string(),
+  is_active: z.number(),
+  status: z.string(),
+  source: z.string(),
+  provenance: z.array(z.string()),
+  submitted_at: z.string(),
+  submitted_by_key_id: z.string(),
+  tenant_id: z.string(),
+});
+export type SkillDraft = z.infer<typeof skillDraftSchema>;
+
+export const listDraftsResponseSchema = z.object({
+  data: z.object({
+    drafts: z.array(skillDraftSchema),
+  }),
+});
+export type ListDraftsResponse = z.infer<typeof listDraftsResponseSchema>;
+
+export const approveDraftResponseSchema = z.object({
+  data: z.object({
+    versionId: z.string(),
+    skillId: z.string(),
+    reviewState: z.string(),
+    versionStatus: z.string(),
+    skillStatus: z.string(),
+  }),
+});
+export type ApproveDraftResponse = z.infer<typeof approveDraftResponseSchema>;
