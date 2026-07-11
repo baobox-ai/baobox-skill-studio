@@ -14,7 +14,7 @@
     "packages/*"
   ],
   "overrides": {
-    "@baobox/sdk": "^0.22.0"
+    "@baobox/sdk": "^0.26.0"
   },
   "scripts": {
     "typecheck": "npm run typecheck --workspaces --if-present",
