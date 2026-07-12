@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+Metadata refresh, no API change.
+
 ## 0.8.0
 
 Depend on `@baobox/sdk` `^0.22.0` (+ contract `^0.7.0`). Fixes the skill page's

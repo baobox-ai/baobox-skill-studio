@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+Metadata refresh, no API change.
+
 ## 0.7.0
 
 Stop eagerly fetching the global model catalog on the skill page. The
