@@ -676,7 +676,7 @@ the write and fires `hooks.onMutation` **after** it commits in BaoBox.
 
 It is a **notification, not a gate** — `authz` is the gate. The host uses it to
 record the live edit as **drift** and queue a **promote-back** into its canonical
-git store (e.g. NexionOps):
+git store (e.g. a downstream consumer's):
 
 ```ts
 onMutation: async (event) => {
@@ -875,7 +875,7 @@ Tick all of these to confirm the full authoring integration is live:
 
 Phase 2 completes the orchestrator authoring surface. Downstream:
 
-- **NexionOps (#255)** consumes this compatibility set (sdk 0.16 / contract 0.2 /
+- **A downstream consumer (#255)** consumes this compatibility set (sdk 0.16 / contract 0.2 /
   bff 0.3 / web 0.2), wiring the real `authz`, `audit`, `onMutation` (drift →
   promote-back) and `parameters` host store (honoring the empty-secret convention).
 - **UAT (#262)** validates the end-to-end tenant authoring flow.

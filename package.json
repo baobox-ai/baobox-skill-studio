@@ -4,7 +4,7 @@
   "private": true,
   "description": "Embeddable Skill Studio — MFE + BFF packages (contract, bff, web component) on top of @baobox/sdk.",
   "license": "MIT",
-  "author": "Bright Qi <bright@adoptive.co>",
+  "author": "BaoBox Maintainers <opensource@baobox.ai>",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/baobox-ai/baobox-skill-studio.git"

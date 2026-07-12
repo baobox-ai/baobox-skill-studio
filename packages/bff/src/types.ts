@@ -78,7 +78,7 @@ export interface AuditRecord {
 /**
  * The git-truth control point (#259). Fired AFTER a structural mutation commits
  * in BaoBox, so the host can record the live edit as drift and queue a
- * promote-back into its canonical git store (NexionOps). It is a notification,
+ * promote-back into its canonical git store (a downstream consumer's). It is a notification,
  * NOT a gate — the gate is `authz`, which runs *before* the write. Because the
  * BaoBox write has already committed by the time this fires, a throwing/rejecting
  * `onMutation` never fails the request (the live state is authoritative); the
