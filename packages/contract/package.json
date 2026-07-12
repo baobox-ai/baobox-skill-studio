@@ -1,6 +1,6 @@
 {
   "name": "@baobox/skill-builder-contract",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Shared BFF↔MFE HTTP contract (types + Zod) for the BaoBox Skill Studio. Reuses @baobox/sdk skill types.",
   "license": "MIT",
   "author": "BaoBox Maintainers <opensource@baobox.ai>",

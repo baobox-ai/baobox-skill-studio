@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+
+Metadata refresh, no API change.
+
 ## 0.7.0
 
 Align `@baobox/sdk` to `^0.22.0`. No contract surface change — the re-exported
