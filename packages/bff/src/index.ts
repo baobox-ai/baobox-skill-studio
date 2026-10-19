@@ -121,6 +121,22 @@ function toContractError(err: unknown, op?: SkillStudioOp): ContractError {
   return { status: 500, code: "internal_error", message: "Internal error" };
 }
 
+// baobox#846 — BaoBox's `GET /api/v1/skills/:id/role-models` answers
+// `{ data: { skillId, roles: { main, preflight_guard, … } } }`, but
+// `@baobox/sdk` (through 0.32.0) returns `body.data` as if it were the bare
+// role map, so `roleModels.get()` actually yields `{ skillId, roles }`. The
+// contract (and the web panel) expect the bare map; forwarding the wrapper made
+// every stored chain read as empty — the panel showed "Inherits tenant default"
+// for a configured guard, and could not see a decision pin to protect it.
+// Unwrap `roles` when present; pass a bare map (a fixed SDK) through as-is.
+function toRoleModelsMap(raw: unknown): unknown {
+  if (raw && typeof raw === "object" && "roles" in raw) {
+    const roles = (raw as { roles: unknown }).roles;
+    if (roles && typeof roles === "object" && !Array.isArray(roles)) return roles;
+  }
+  return raw;
+}
+
 // Per-tenant parameters: a value marked `secret` must NEVER leave the server in
 // cleartext (#258 / #259). The host's store owns the real value; the BFF blanks
 // it in every response so the browser only ever sees that a secret is set.
@@ -529,14 +545,15 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
 
   // GET /skills/:id/role-models → SkillRoleModelsMap (#328)
   // Returns the full role → chain map for the skill. Requires `skills:read`.
-  // The result is passed through as-is (no secrets, no filtering needed).
+  // No secrets, no filtering; the BaoBox `{ skillId, roles }` wrapper is
+  // unwrapped to the bare map (see `toRoleModelsMap`).
   app.get("/skills/:id/role-models", async (c) => {
     const id = c.req.param("id");
     try {
       await authorize("getRoleModels", { skillId: id });
-      const roleModels = await client.skills.roleModels.get(id, { tenantId });
+      const roleModels = toRoleModelsMap(await client.skills.roleModels.get(id, { tenantId }));
       await audit({ op: "getRoleModels", tenantId, skillId: id, outcome: "allowed" });
-      return c.json(roleModels);
+      return c.json(roleModels as Record<string, unknown>);
     } catch (err) {
       return respondError(c, err, "getRoleModels", { skillId: id });
     }

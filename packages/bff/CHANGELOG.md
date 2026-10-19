@@ -5,6 +5,18 @@
 Depend on `@baobox/sdk` `^0.32.0` and `@baobox/skill-builder-contract`
 `^0.8.0`. Refs baobox#846. No route added or removed.
 
+### Fixed
+
+- `GET /skills/:id/role-models` returned BaoBox's `{ skillId, roles }` wrapper
+  instead of the bare role map the contract declares. The server answers
+  `{ data: { skillId, roles } }` and `@baobox/sdk` (through 0.32.0) hands back
+  `data` unchanged, so the Studio panel read every stored chain as empty. The
+  BFF now unwraps `roles` (a bare map is still passed through, so a future SDK
+  fix is harmless). The web 0.8.0 read-only guard for decision pins needs this:
+  without it a decision pin looked like "Inherits tenant default".
+
+### Changed
+
 - `PUT /skills/:id/role-models` forwards each chain entry's optional `mode`
   (`"chat"` / `"decision"`) to BaoBox. The contract used to reject the key, so
   a client could not send it. An omitted `mode` stays omitted, so BaoBox infers

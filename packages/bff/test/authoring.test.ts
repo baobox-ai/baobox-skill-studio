@@ -1077,6 +1077,23 @@ describe("SDK 0.32.0 surfaces pass through the BFF (baobox#846)", () => {
     expect(stub.roleModelsCalls.put).not.toHaveBeenCalled();
   });
 
+  it("GET role-models unwraps BaoBox's { skillId, roles } wrapper (what the SDK actually returns) to the bare role map", async () => {
+    const roles = {
+      main: [],
+      preflight_guard: [
+        { skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: "tllm_dec", model: "jev-1.14.0", llmSource: "pinned", mode: "decision" },
+      ],
+      postflight_guard: [],
+      eval_judge: [],
+    };
+    // Real server body is { data: { skillId, roles } }; SDK ≤0.32.0 returns body.data verbatim.
+    const stub = makeStub({ roleModelsGet: async () => ({ skillId: "sk_1", roles }) });
+    const app = makeBff(stub);
+    const res = await app.request("/skills/sk_1/role-models");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(roles);
+  });
+
   it("GET role-models returns each entry's mode", async () => {
     const ROLE_MAP = {
       main: [],
