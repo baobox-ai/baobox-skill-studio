@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.9.0
+
+Depend on `@baobox/sdk` `^0.32.0` and `@baobox/skill-builder-contract`
+`^0.8.0`. Refs baobox#846. No route added or removed.
+
+- `PUT /skills/:id/role-models` forwards each chain entry's optional `mode`
+  (`"chat"` / `"decision"`) to BaoBox. The contract used to reject the key, so
+  a client could not send it. An omitted `mode` stays omitted, so BaoBox infers
+  it (an existing decision pin keeps its mode). Unknown keys on an entry are
+  still a 400 `validation_error`.
+- `GET /skills/:id/role-models` returns each entry's `mode` as BaoBox sends it.
+- `GET /skills` list rows carry `skillKind` when BaoBox sends it (used for the
+  decision-skill badge). `GET /skills/:id` returns `skillKind` and
+  `decisionSpec` as they arrive from the SDK. `PUT`/`PATCH /skills/:id` still
+  refuse both keys (400): Studio does not change a skill's kind or spec.
+- `GET /llm-integrations` passes `defaultModel: null` through (SDK 0.32.0
+  widened the type to `string | null`).
+
 ## 0.8.1
 
 Metadata refresh, no API change.

@@ -544,7 +544,12 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
 
   // PUT /skills/:id/role-models (body: { role, chain }) → { role, chain } (#328)
   // Replaces the model chain for a single role. Requires `skills:write`.
-  // The chain is validated by the contract schema before reaching the SDK.
+  // The chain is validated by the contract schema before reaching the SDK and
+  // forwarded verbatim — including each entry's optional `mode` (SDK 0.32.0).
+  // An omitted `mode` stays omitted so BaoBox infers it; the BFF never
+  // invents one. BaoBox enforces the semantic rules (e.g. `pinned` needs an
+  // `llmIntegrationId` → 400 `invalid_role_model`; `mode: "decision"` only on
+  // guard roles with a decision-capable pinned integration → 422).
   app.put("/skills/:id/role-models", async (c) => {
     const id = c.req.param("id");
     try {
