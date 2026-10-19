@@ -10,7 +10,9 @@ import {
   attachSubSkillRequestSchema,
   attachToolRequestSchema,
   putRoleModelsRequestSchema,
+  ROLE_MODELS_SHAPE_ERROR,
   setSkillParametersRequestSchema,
+  skillRoleModelsMapSchema,
   skillCreateRequestSchema,
   skillStructuralUpdateRequestSchema,
   skillUpdateRequestSchema,
@@ -49,6 +51,16 @@ class AuthzDenied extends Error {
   constructor(message = "Not authorized") {
     super(message);
     this.name = "AuthzDenied";
+  }
+}
+
+// The SDK answered, but not with the shape the contract promises (e.g. a host
+// pinned an old `@baobox/sdk`). Mapped to 502 `upstream_error` so the Web
+// Component fails closed instead of treating the payload as empty.
+class UpstreamShapeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UpstreamShapeError";
   }
 }
 
@@ -108,6 +120,9 @@ function normalizeContractCode(
 function toContractError(err: unknown, op?: SkillStudioOp): ContractError {
   if (err instanceof AuthzDenied) {
     return { status: 403, code: "forbidden", message: err.message };
+  }
+  if (err instanceof UpstreamShapeError) {
+    return { status: 502, code: "upstream_error", message: err.message };
   }
   if (err instanceof BaoBoxError) {
     const status = err.status >= 400 && err.status < 600 ? err.status : 502;
@@ -530,12 +545,19 @@ export function createSkillBuilderBff(config: SkillStudioBffConfig): Hono {
   // GET /skills/:id/role-models → SkillRoleModelsMap (#328)
   // Returns the full role → chain map for the skill. Requires `skills:read`.
   // No secrets, no filtering. `@baobox/sdk` >= 0.32.1 returns the bare role
-  // map (it unwraps BaoBox's `{ skillId, roles }`), which is forwarded as-is.
+  // map (it unwraps BaoBox's `{ skillId, roles }`), which is forwarded as-is
+  // after `skillRoleModelsMapSchema` confirms the shape. Anything else (the
+  // wrapper from an older SDK forced by a host override, a missing role, an
+  // unknown mode) is a 502 `upstream_error`: the Web Component then refuses to
+  // edit, rather than reading the chains as empty and overwriting them.
   app.get("/skills/:id/role-models", async (c) => {
     const id = c.req.param("id");
     try {
       await authorize("getRoleModels", { skillId: id });
       const roleModels = await client.skills.roleModels.get(id, { tenantId });
+      if (!skillRoleModelsMapSchema.safeParse(roleModels).success) {
+        throw new UpstreamShapeError(ROLE_MODELS_SHAPE_ERROR);
+      }
       await audit({ op: "getRoleModels", tenantId, skillId: id, outcome: "allowed" });
       return c.json(roleModels);
     } catch (err) {

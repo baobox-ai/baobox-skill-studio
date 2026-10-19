@@ -1097,6 +1097,31 @@ describe("SDK 0.32.0 surfaces pass through the BFF (baobox#846)", () => {
     expect(body).not.toHaveProperty("skillId");
   });
 
+  it("GET role-models fails closed (502 upstream_error naming the SDK requirement) on the { skillId, roles } wrapper", async () => {
+    const roles = { main: [], preflight_guard: [], postflight_guard: [], eval_judge: [] };
+    const records: AuditRecord[] = [];
+    // What a host gets if it forces @baobox/sdk < 0.32.1 via its own overrides.
+    const stub = makeStub({ roleModelsGet: async () => ({ skillId: "sk_1", roles }) });
+    const app = makeBff(stub, { audit: (r) => void records.push(r) });
+    const res = await app.request("/skills/sk_1/role-models");
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("upstream_error");
+    expect(body.error.message).toMatch(/@baobox\/sdk 0\.32\.1 or later/);
+    expect(records).toContainEqual(expect.objectContaining({ op: "getRoleModels", outcome: "error" }));
+  });
+
+  it("GET role-models fails closed on a map with a missing role or a non-array chain", async () => {
+    for (const bad of [
+      { main: [], preflight_guard: [], postflight_guard: [] },
+      { main: [], preflight_guard: {}, postflight_guard: [], eval_judge: [] },
+    ]) {
+      const stub = makeStub({ roleModelsGet: async () => bad });
+      const res = await makeBff(stub).request("/skills/sk_1/role-models");
+      expect(res.status).toBe(502);
+    }
+  });
+
   it("GET role-models returns each entry's mode", async () => {
     const ROLE_MAP = {
       main: [],

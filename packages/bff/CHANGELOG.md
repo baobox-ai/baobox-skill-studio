@@ -15,6 +15,13 @@ Depend on `@baobox/sdk` `^0.32.1` and `@baobox/skill-builder-contract`
   forwards the map unchanged (the response shape is the same role map). The
   web 0.8.0 read-only guard for decision pins depends on this: with the
   wrapper, a decision pin looked like "Inherits tenant default".
+- `GET /skills/:id/role-models` fails closed. The SDK result is checked
+  against the contract's `skillRoleModelsMapSchema`; anything else (the
+  `{ skillId, roles }` wrapper from an older SDK that a host's own
+  `overrides["@baobox/sdk"]` forces, a missing role, a non-array chain, an
+  unknown `mode`) returns 502 `upstream_error` with a message naming the
+  `@baobox/sdk` 0.32.1 requirement, instead of a payload the panel would read
+  as empty chains.
 
 ### Changed
 
@@ -28,7 +35,7 @@ Depend on `@baobox/sdk` `^0.32.1` and `@baobox/skill-builder-contract`
   decision-skill badge). `GET /skills/:id` returns `skillKind` and
   `decisionSpec` as they arrive from the SDK. `PUT`/`PATCH /skills/:id` still
   refuse both keys (400): Studio does not change a skill's kind or spec.
-- `GET /llm-integrations` passes `defaultModel: null` through (SDK 0.32.0
+- `GET /llm-integrations` passes `defaultModel: null` through (SDK 0.32.x
   widened the type to `string | null`).
 
 ## 0.8.1
