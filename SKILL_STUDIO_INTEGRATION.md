@@ -27,18 +27,20 @@ Your backend:  @baobox/skill-builder-bff  ──(apiKey, tenant-scoped)──▶
 
 | Package | Version | Where it runs | Role |
 | ------- | ------- | ------------- | ---- |
-| [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.19.0` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257 + model catalog #320 + per-role models #328) |
-| [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.5.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
-| [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.6.0` | your backend | mountable Hono BFF router |
-| [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.5.0` | browser | `<baobox-skill-builder>` Web Component |
+| [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.32.0` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257 + model catalog #320 + per-role models #328 + decision skills / role-model `mode`) |
+| [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.8.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
+| [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.9.0` | your backend | mountable Hono BFF router |
+| [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.8.0` | browser | `<baobox-skill-builder>` Web Component |
 
 These four versions are a **compatibility set** — install them together. The
-contract is the pinned interface between the BFF (`^0.6.0`) and the Web Component
-(`^0.5.0`); both depend on `@baobox/skill-builder-contract@^0.5.0`, and the BFF
-additionally needs `@baobox/sdk@^0.19.0` (the SDK that adds
-`client.skills.roleModels.get/put()` for per-role guard model config #328).
-Mixing a `0.5.x` web bundle with a `0.5.x` BFF loses the `getRoleModels` /
-`putRoleModels` endpoints (404 → panel shows a load error) — keep the set aligned.
+contract is the pinned interface between the BFF (`^0.9.0`) and the Web Component
+(`^0.8.0`); both depend on `@baobox/skill-builder-contract@^0.8.0`, and the BFF
+additionally needs `@baobox/sdk@^0.32.0` (decision-skill fields, the role-model
+`mode`, and `LlmIntegration.defaultModel: string | null`). If your backend's
+`package.json` uses `overrides` for `@baobox/sdk`, move it to `^0.32.0` too —
+an override caps every package that depends on the SDK. Mixing an older BFF
+with the 0.8.0 web bundle drops `mode` from role-model writes (the old
+contract rejects the key) — keep the set aligned.
 
 > Phase 2 is **additive**: the Phase-1 endpoints keep their exact method+path, so
 > an existing Phase-1 integration keeps working after the upgrade — you opt into
@@ -428,7 +430,8 @@ contract as `SkillRoleModelsMap`).
   "main": [],
   "preflight_guard": [
     { "skillId": "sk_abc", "role": "preflight_guard", "position": 0,
-      "llmIntegrationId": null, "model": "openai/gpt-5", "llmSource": "pinned" }
+      "llmIntegrationId": null, "model": "gpt-5.4", "llmSource": "tenant_default",
+      "mode": "chat" }
   ],
   "postflight_guard": [],
   "eval_judge": []
@@ -440,8 +443,22 @@ contract as `SkillRoleModelsMap`).
 Replaces the model chain for **one role** on a skill. Requires `skills:write`.
 The `authz` hook sees `op="putRoleModels"` with `skillId`. Chain is an ordered
 array of up to 4 entries; an empty array clears the role (inherits tenant
-default). In the Studio scope, `llmIntegrationId` may be `null` (catalog model, `llmSource: "pinned"`)
-or an integration id returned by `GET /llm-integrations` (see #330 below).
+default). Each entry is `{ llmIntegrationId, model, llmSource, mode? }`:
+
+- **What Studio sends:** `{ "llmIntegrationId": null, "model": "<catalog id>",
+  "llmSource": "tenant_default", "mode": "chat" }`. The entry runs on the
+  tenant's default LLM integration; the model is used when it belongs to that
+  integration's provider, otherwise the integration's default model is used.
+- **`llmSource: "pinned"` needs an `llmIntegrationId`** (an id from
+  `GET /llm-integrations`). `pinned` with `llmIntegrationId: null` is rejected
+  by BaoBox with 400 `invalid_role_model`. Studio releases before web 0.8.0 sent
+  exactly that, so their guard-chain saves always failed.
+- **`mode`** (`"chat"` | `"decision"`, optional): omitted ⇒ BaoBox infers it
+  (an entry on an integration that is already stored keeps its stored mode).
+  `"decision"` runs the guard on a decision model and is accepted only on
+  `preflight_guard` / `postflight_guard`, as a `pinned` entry on a
+  decision-capable integration (422 otherwise). The BFF forwards `mode`
+  unchanged; the contract rejects any other key on an entry.
 
 ```jsonc
 // PUT /skills/sk_abc/role-models
@@ -449,8 +466,8 @@ or an integration id returned by `GET /llm-integrations` (see #330 below).
 {
   "role": "preflight_guard",
   "chain": [
-    { "llmIntegrationId": null, "model": "openai/gpt-5", "llmSource": "pinned" },
-    { "llmIntegrationId": null, "model": "openai/gpt-4o", "llmSource": "pinned" }
+    { "llmIntegrationId": null, "model": "gpt-5.4", "llmSource": "tenant_default", "mode": "chat" },
+    { "llmIntegrationId": null, "model": "gpt-4o-mini", "llmSource": "tenant_default", "mode": "chat" }
   ]
 }
 // response: { "role": "preflight_guard", "chain": [...] }
@@ -468,6 +485,32 @@ or an integration id returned by `GET /llm-integrations` (see #330 below).
 platform-level concern). The BFF and contract types include it for API
 completeness.
 
+A role whose saved chain Studio can't represent is shown **read-only** (selects,
+Save and Inherit default disabled): any `mode: "decision"` entry ("set in the
+Portal (decision model)"), or a chat entry pinned to a specific integration or
+the platform key. Studio would otherwise replace those entries with
+tenant-default ones. On a decision skill only `preflight_guard` is shown:
+BaoBox refuses a `main` pin (422 `decision_skill_no_main_pin`), and a decision
+skill's postflight guard never runs.
+
+#### Decision skills (`skillKind: "decision"`)
+
+`GET /skills` rows carry `skillKind` when BaoBox sends it, and `GET /skills/:id`
+carries `skillKind` and `decisionSpec` (the SDK's `DecisionSkillSpec`). Absent
+`skillKind` means chat. Studio's support is deliberately minimal:
+
+- a `decision` badge in the list and on the skill page;
+- name, description and the **preamble** (the skill's `systemPrompt`, at most
+  4000 characters) are editable, and a save sends only the changed fields;
+- the question spec is shown read-only as JSON. The spec, the decision model and
+  its integration are edited in the BaoBox Portal;
+- the model / integration picker, temperature / max tokens / reasoning effort,
+  tools, sub-skills, main backup and postflight guard are hidden (BaoBox
+  refuses each one on a decision skill with a 422).
+
+The contract's write schemas don't accept `skillKind` or `decisionSpec`, so
+Studio can't create a decision skill or change a skill's kind.
+
 #### `GET /llm-integrations` → `{ data: LlmIntegration[] }` (#330)
 
 Returns the tenant's configured LLM integrations. The `authz` hook sees
@@ -479,7 +522,7 @@ interface LlmIntegration {
   id: string;           // opaque integration id — pass as llmIntegrationId
   displayName: string;  // e.g. "OpenAI (tenant)"
   provider: string;     // e.g. "openai"
-  defaultModel: string; // provider's default for this integration
+  defaultModel: string | null; // the integration's default model; null when none is set
   isDefault: boolean;   // true for the tenant's default integration
   apiKeyMask: string;   // last-4 of the API key, safe to display
 }

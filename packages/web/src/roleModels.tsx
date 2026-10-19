@@ -18,7 +18,7 @@
 //
 // baobox#846 — why `tenant_default` and not `pinned`: BaoBox requires an
 // `llmIntegrationId` on every `pinned` entry and rejects `pinned` + null with
-// 400 `invalid_role_model` (skill-role-model.service assertChain). Studio has
+// 400 `invalid_role_model` ("llmSource 'pinned' requires an llmIntegrationId"). Studio has
 // no integration picker on these slots, so it sends `tenant_default`: the
 // entry runs on the tenant's default LLM integration, and the chosen model is
 // honoured when it belongs to that integration's provider, else the
