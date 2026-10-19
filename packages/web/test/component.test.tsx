@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/preact";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { describe, expect, it, vi } from "vitest";
-import type { IntegrationModelsViewResponse, SkillDetail, SkillStudioApi } from "../src/api.js";
+import type { IntegrationModelsViewResponse, SkillDetail, SkillRoleModelsMap, SkillStudioApi } from "../src/api.js";
 import { registerSkillBuilder } from "../src/element.js";
 import { SkillStudio } from "../src/SkillStudio.js";
 import { MODEL_CATALOG, getReasoningEfforts } from "../src/modelCatalog.js";
@@ -590,5 +590,248 @@ describe("<SkillStudio> integration-first model picker (#330)", () => {
     expect(modelInput.tagName).toBe("INPUT");
     // Note about no integrations should be visible
     await screen.findByText(/No LLM integrations configured/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// baobox#846 — guard-slot write body, read-only Portal pins, decision skills.
+// ---------------------------------------------------------------------------
+
+const EMPTY_ROLES: SkillRoleModelsMap = { main: [], preflight_guard: [], postflight_guard: [], eval_judge: [] };
+
+function roleEntry(over: Partial<SkillRoleModelsMap["main"][number]> & { role: SkillRoleModelsMap["main"][number]["role"] }) {
+  return {
+    skillId: "sk_1",
+    position: 0,
+    llmIntegrationId: null,
+    model: "gpt-5",
+    llmSource: "tenant_default" as const,
+    mode: "chat" as const,
+    ...over,
+  };
+}
+
+async function openFirstSkill(api: SkillStudioApi) {
+  render(<SkillStudio apiBase="/bff" api={api} />);
+  fireEvent.click(await screen.findByText("Invoice Chaser"));
+}
+
+describe("<SkillStudio> per-role models — guard-slot write body (baobox#846)", () => {
+  it("a guard Save sends tenant_default + model + mode chat (never pinned with a null integration)", async () => {
+    const api = mockApi();
+    await openFirstSkill(api);
+    const row = await screen.findByTestId("role-row-preflight_guard");
+    const [primary, backup] = within(row).getAllByRole("combobox") as HTMLSelectElement[];
+    fireEvent.change(primary as HTMLSelectElement, { target: { value: "gpt-5" } });
+    fireEvent.change(backup as HTMLSelectElement, { target: { value: "MiniMax-M2.7" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.putRoleModels).toHaveBeenCalledTimes(1));
+    expect(api.putRoleModels).toHaveBeenCalledWith("sk_1", {
+      role: "preflight_guard",
+      chain: [
+        { llmIntegrationId: null, model: "gpt-5", llmSource: "tenant_default", mode: "chat" },
+        { llmIntegrationId: null, model: "MiniMax-M2.7", llmSource: "tenant_default", mode: "chat" },
+      ],
+    });
+    const body = (api.putRoleModels as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as { chain: Array<{ llmSource: string }> };
+    expect(body.chain.some((e) => e.llmSource === "pinned")).toBe(false);
+  });
+
+  it("the main backup Save uses the same tenant_default body", async () => {
+    const api = mockApi();
+    await openFirstSkill(api);
+    const row = await screen.findByTestId("role-row-main");
+    fireEvent.change(within(row).getByRole("combobox"), { target: { value: "gpt-5-mini" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(api.putRoleModels).toHaveBeenCalledWith("sk_1", {
+        role: "main",
+        chain: [{ llmIntegrationId: null, model: "gpt-5-mini", llmSource: "tenant_default", mode: "chat" }],
+      }),
+    );
+  });
+
+  it("each guard row explains the tenant-default + same-provider rule", async () => {
+    await openFirstSkill(mockApi());
+    const row = await screen.findByTestId("role-row-postflight_guard");
+    expect(within(row).getByText(/tenant's default LLM integration/)).toBeTruthy();
+    expect(within(row).getByText(/different provider/)).toBeTruthy();
+  });
+
+  it("a tenant_default chain Studio wrote stays editable and round-trips", async () => {
+    const api = mockApi({
+      getRoleModels: vi.fn(async () => ({
+        ...EMPTY_ROLES,
+        preflight_guard: [roleEntry({ role: "preflight_guard", model: "gpt-5" })],
+      })),
+    });
+    await openFirstSkill(api);
+    const row = await screen.findByTestId("role-row-preflight_guard");
+    await waitFor(() => expect((within(row).getAllByRole("combobox")[0] as HTMLSelectElement).value).toBe("gpt-5"));
+    const save = within(row).getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(api.putRoleModels).toHaveBeenCalledWith("sk_1", {
+        role: "preflight_guard",
+        chain: [{ llmIntegrationId: null, model: "gpt-5", llmSource: "tenant_default", mode: "chat" }],
+      }),
+    );
+  });
+});
+
+describe("<SkillStudio> per-role models — Portal pins are read-only (baobox#846)", () => {
+  it("a role whose chain has a mode: decision entry renders read-only with Save + Inherit disabled", async () => {
+    const api = mockApi({
+      getRoleModels: vi.fn(async () => ({
+        ...EMPTY_ROLES,
+        preflight_guard: [
+          roleEntry({ role: "preflight_guard", llmIntegrationId: "tllm_dec", model: "jev-1.14.0", llmSource: "pinned", mode: "decision" }),
+          roleEntry({ role: "preflight_guard", position: 1, model: "gpt-5" }),
+        ],
+      })),
+    });
+    await openFirstSkill(api);
+    const row = await screen.findByTestId("role-row-preflight_guard");
+    await waitFor(() => expect(within(row).getByText("set in the Portal (decision model)", { exact: false })).toBeTruthy());
+    // Status shows the decision entry as such.
+    expect(within(row).getByText("jev-1.14.0 · decision → gpt-5")).toBeTruthy();
+    const save = within(row).getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    const inherit = within(row).getByRole("button", { name: "Inherit default" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    expect(inherit.disabled).toBe(true);
+    for (const sel of within(row).getAllByRole("combobox") as HTMLSelectElement[]) expect(sel.disabled).toBe(true);
+    fireEvent.click(save);
+    fireEvent.click(inherit);
+    expect(api.putRoleModels).not.toHaveBeenCalled();
+    // Other roles stay editable.
+    const post = screen.getByTestId("role-row-postflight_guard");
+    expect((within(post).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("a chat chain pinned to an integration is also read-only (Studio would otherwise replace it)", async () => {
+    const api = mockApi({
+      getRoleModels: vi.fn(async () => ({
+        ...EMPTY_ROLES,
+        postflight_guard: [roleEntry({ role: "postflight_guard", llmIntegrationId: "tllm_1", model: "gpt-5", llmSource: "pinned" })],
+      })),
+    });
+    await openFirstSkill(api);
+    const row = await screen.findByTestId("role-row-postflight_guard");
+    await waitFor(() => expect(within(row).getByTestId("postflight_guard-readonly")).toBeTruthy());
+    expect((within(row).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+const decisionDetail: SkillDetail = {
+  ...detail,
+  id: "sk_dec",
+  name: "Inbox Triage",
+  systemPrompt: "Triage inbound support email.",
+  model: "jev-1.14.0",
+  skillKind: "decision",
+  decisionSpec: {
+    version: 1,
+    questions: [
+      { id: "urgent", type: "boolean", prompt: "Is the message urgent?" },
+      { id: "severity", type: "score", prompt: "How severe?", levels: [{ label: "low", description: "minor" }, { label: "high", description: "major" }] },
+    ],
+  },
+};
+
+function decisionApi(over: Partial<SkillStudioApi> = {}): SkillStudioApi {
+  return mockApi({
+    listSkills: vi.fn(async () => [
+      { id: "sk_dec", name: "Inbox Triage", description: "Triage.", model: "jev-1.14.0", tenantId: "t_1", updatedAt: "x", skillKind: "decision" as const },
+      { id: "sk_1", name: "Invoice Chaser", description: "Chases invoices.", model: "MiniMax-M2.7", tenantId: "t_1", updatedAt: "x", skillKind: "chat" as const },
+    ]),
+    getSkill: vi.fn(async (id: string) => (id === "sk_dec" ? decisionDetail : detail)),
+    updateSkillStructural: vi.fn(async (_id, body) => ({ ...decisionDetail, ...body })),
+    ...over,
+  });
+}
+
+describe("<SkillStudio> decision skills (baobox#846)", () => {
+  it("the list shows a decision badge on decision skills only", async () => {
+    render(<SkillStudio apiBase="/bff" api={decisionApi()} />);
+    const dec = (await screen.findByText("Inbox Triage")).closest("button") as HTMLElement;
+    expect(within(dec).getByTestId("skill-kind-badge").textContent).toBe("decision");
+    const chat = screen.getByText("Invoice Chaser").closest("button") as HTMLElement;
+    expect(within(chat).queryByTestId("skill-kind-badge")).toBeNull();
+  });
+
+  it("the detail shows the badge, an editable Preamble, and the spec as read-only JSON", async () => {
+    const api = decisionApi();
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Inbox Triage"));
+    const preamble = (await screen.findByLabelText("Preamble")) as HTMLTextAreaElement;
+    expect(preamble.value).toBe("Triage inbound support email.");
+    expect(screen.queryByLabelText("System prompt")).toBeNull();
+    expect(screen.getByTestId("skill-kind-badge")).toBeTruthy();
+    expect(screen.getByTestId("preamble-counter").textContent).toBe(`${"Triage inbound support email.".length} / 4000`);
+    const spec = screen.getByLabelText("Decision spec");
+    expect(JSON.parse(spec.textContent ?? "")).toEqual(decisionDetail.decisionSpec);
+    expect(screen.getByText(/Edit the questions, the decision model and its integration in the BaoBox/)).toBeTruthy();
+  });
+
+  it("hides every panel BaoBox would refuse on a decision skill", async () => {
+    const api = decisionApi();
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Inbox Triage"));
+    await screen.findByLabelText("Preamble");
+    // Model / integration / params
+    expect(screen.queryByLabelText("Model")).toBeNull();
+    expect(screen.queryByLabelText("LLM integration")).toBeNull();
+    expect(screen.queryByLabelText("Temperature")).toBeNull();
+    expect(screen.queryByLabelText("Max Tokens")).toBeNull();
+    expect(screen.queryByLabelText("Reasoning Effort")).toBeNull();
+    expect(api.listLlmIntegrations).not.toHaveBeenCalled();
+    // Tools / sub-skills
+    expect(screen.queryByText("Sub-skills (orchestrator graph)")).toBeNull();
+    expect(screen.queryByText("Tools")).toBeNull();
+    expect(api.listTools).not.toHaveBeenCalled();
+    expect(api.listAttachedSkills).not.toHaveBeenCalled();
+    // Per-role: preflight only — no main backup, no postflight.
+    expect(await screen.findByTestId("role-row-preflight_guard")).toBeTruthy();
+    expect(screen.queryByTestId("role-row-postflight_guard")).toBeNull();
+    expect(screen.queryByTestId("role-row-main")).toBeNull();
+  });
+
+  it("a preamble edit saves only systemPrompt (no model / params / integration keys)", async () => {
+    const api = decisionApi();
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Inbox Triage"));
+    const preamble = await screen.findByLabelText("Preamble");
+    fireEvent.input(preamble, { target: { value: "Triage inbound email. Be strict." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(api.updateSkillStructural).toHaveBeenCalledWith("sk_dec", { systemPrompt: "Triage inbound email. Be strict." }),
+    );
+  });
+
+  it("blocks save when the preamble exceeds 4000 characters", async () => {
+    const api = decisionApi();
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Inbox Triage"));
+    const preamble = await screen.findByLabelText("Preamble");
+    fireEvent.input(preamble, { target: { value: "x".repeat(4001) } });
+    expect(await screen.findByText("The preamble can be at most 4000 characters.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.updateSkillStructural).not.toHaveBeenCalled();
+  });
+
+  it("a chat skill is unchanged: no badge, System prompt label, model + tools + sub-skills panels", async () => {
+    const api = decisionApi();
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+    expect(await screen.findByLabelText("System prompt")).toBeTruthy();
+    expect(screen.queryByLabelText("Preamble")).toBeNull();
+    expect(screen.queryByTestId("skill-kind-badge")).toBeNull();
+    expect(screen.queryByLabelText("Decision spec")).toBeNull();
+    expect(await screen.findByLabelText("Model")).toBeTruthy();
+    expect(screen.getByText("Sub-skills (orchestrator graph)")).toBeTruthy();
+    expect(screen.getByText("Tools")).toBeTruthy();
+    expect(await screen.findByTestId("role-row-main")).toBeTruthy();
+    expect(screen.getByTestId("role-row-postflight_guard")).toBeTruthy();
   });
 });

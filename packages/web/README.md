@@ -93,11 +93,31 @@ cross-origin and the element never calls BaoBox. The BFF is the auth boundary:
 | sub-skills     | `GET/POST {api-base}/skills/:id/attached-skills`, `DELETE …/:childId` |
 | tools          | `GET/POST {api-base}/skills/:id/tools`, `DELETE …/:toolId` |
 | parameters     | `GET/PUT {api-base}/skills/:id/parameters` |
+| per-role models | `GET/PUT {api-base}/skills/:id/role-models` |
 
 A non-2xx carries the contract's stable `{ error: { code } }`; the UI branches on
 `code` (e.g. `cycle_detected` → a graph-cycle message, `tool_not_allowed` → an
 allowlist message). The off-allowlist guard is enforced **server-side** — the BFF
 is the authority on which tools a tenant may attach.
+
+### Per-role models
+
+The guard and main-backup slots pick a model from the catalog and save it as
+`{ llmIntegrationId: null, model, llmSource: "tenant_default", mode: "chat" }`:
+the guard runs on the tenant's default LLM integration, and a model from a
+different provider than that integration falls back to the integration's
+default model. A role whose saved chain Studio can't represent (a decision-model
+pin, or a pin to a specific integration, both set in the BaoBox Portal) is shown
+read-only, so a save from Studio never replaces it.
+
+### Decision skills
+
+A decision skill (`skillKind: "decision"`) gets a `decision` badge in the list
+and on its page. Only the name, description and preamble (the system prompt,
+at most 4000 characters) are editable. The question spec is shown read-only as
+JSON. The model, parameters, tools, sub-skills, main backup and postflight guard
+are hidden because BaoBox refuses them on a decision skill. The spec and the
+decision model are edited in the BaoBox Portal.
 
 ## Local dev (mock BFF, no backend)
 
@@ -118,5 +138,5 @@ renders list/detail/edit with no live backend.
 
 ## Versioning
 
-`0.2.0`. Published from the `baobox-skill-studio` monorepo via a tag-driven
+`0.8.0`. Published from the `baobox-skill-studio` monorepo via a tag-driven
 release (`web-v*` → GitHub Actions → npm).

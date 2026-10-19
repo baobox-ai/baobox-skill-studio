@@ -5,7 +5,7 @@ import {
   type SkillStudioApi,
   type SkillSummary,
 } from "./api.js";
-import { SkillDetailView } from "./detail.js";
+import { DecisionBadge, SkillDetailView, isDecisionKind } from "./detail.js";
 import { IncomingDrafts } from "./drafts.js";
 import { resolvePalette, THEME_STYLE, type ThemeName } from "./theme.js";
 import { ghostBtn, inputStyle, labelStyle, linkBtn, msgOf, primaryBtn } from "./ui.js";
@@ -218,7 +218,10 @@ function SkillList({
                   color: p.fg,
                 }}
               >
-                <div style={{ fontWeight: 600 }}>{s.name}</div>
+                <div style={{ fontWeight: 600 }}>
+                  {s.name}
+                  {isDecisionKind(s) && <DecisionBadge palette={p} />}
+                </div>
                 <div style={{ color: p.muted, fontSize: "0.8rem" }}>
                   {s.id} · {s.model}
                   {s.tenantId === null ? " · global" : ""}

@@ -19,6 +19,7 @@ import {
 } from "./modelCatalog.js";
 import type { Palette } from "./theme.js";
 import {
+  badgeStyle,
   cardStyle,
   codeOf,
   ghostBtn,
@@ -29,6 +30,24 @@ import {
   primaryBtn,
   sectionTitle,
 } from "./ui.js";
+
+// baobox#846 — decision skills (SDK 0.32.0). BaoBox caps the preamble (the
+// skill's systemPrompt) at 4000 characters (413 `decision_preamble_too_large`).
+export const DECISION_PREAMBLE_MAX = 4000;
+
+/** `true` iff the skill is a decision skill (an absent kind is chat). */
+export function isDecisionKind(skill: { skillKind?: string | null }): boolean {
+  return skill.skillKind === "decision";
+}
+
+/** The `decision` badge shown next to a decision skill's name. */
+export function DecisionBadge({ palette: p }: { palette: Palette }) {
+  return (
+    <span data-testid="skill-kind-badge" title="Decision skill" style={badgeStyle(p)}>
+      decision
+    </span>
+  );
+}
 
 interface DetailProps {
   api: SkillStudioApi;
@@ -482,6 +501,11 @@ function EditableSkill({
   // run after the first paint and clobber an in-flight edit). The form is
   // re-seeded explicitly from the server's response after a successful save.
   const [draft, setDraft] = useState<EditDraft>(() => toDraft(detail));
+  // baobox#846 — a decision skill only exposes name / description / preamble.
+  // Every hidden panel would be refused server-side (422): a free-text model
+  // (`invalid_decision_model`), a chat integration
+  // (`integration_not_decision_capable`), tools, sub-skills, a main pin.
+  const decision = isDecisionKind(detail);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -503,9 +527,14 @@ function EditableSkill({
   const [modelsView, setModelsView] = useState<IntegrationModelsViewResponse | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
 
-  // Load the tenant's integrations once per api instance.
+  // Load the tenant's integrations once per api instance (chat skills only —
+  // a decision skill has no model picker).
   // biome-ignore lint/correctness/useExhaustiveDependencies: load once per api instance
   useEffect(() => {
+    if (decision) {
+      setIntegrationsLoading(false);
+      return;
+    }
     setIntegrationsLoading(true);
     api
       .listLlmIntegrations()
@@ -523,7 +552,7 @@ function EditableSkill({
   // When the selected integration changes, fetch its model list.
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — react to draft.llmIntegrationId
   useEffect(() => {
-    if (!draft.llmIntegrationId) {
+    if (decision || !draft.llmIntegrationId) {
       setModelsView(null);
       return;
     }
@@ -592,11 +621,16 @@ function EditableSkill({
     modelFamily !== "reasoning" &&
     draft.maxTokens.trim() !== "" &&
     (!Number.isInteger(maxNum) || maxNum < 1);
-  const numericError = tempInvalid
-    ? "Temperature must be a number between 0 and 2."
-    : maxInvalid
-      ? "Max tokens must be a positive integer."
-      : null;
+  const preambleTooLong = decision && draft.systemPrompt.length > DECISION_PREAMBLE_MAX;
+  const numericError = decision
+    ? preambleTooLong
+      ? `The preamble can be at most ${DECISION_PREAMBLE_MAX} characters.`
+      : null
+    : tempInvalid
+      ? "Temperature must be a number between 0 and 2."
+      : maxInvalid
+        ? "Max tokens must be a positive integer."
+        : null;
 
   // Detail's server-side llmIntegrationId (additive runtime field).
   const detailIntegrationId =
@@ -608,6 +642,8 @@ function EditableSkill({
     if (draft.name !== detail.name) out.name = draft.name;
     if (draft.description !== detail.description) out.description = draft.description;
     if (draft.systemPrompt !== detail.systemPrompt) out.systemPrompt = draft.systemPrompt;
+    // A decision skill's model / params / integration are not editable here.
+    if (decision) return out;
     if (draft.model !== detail.model) out.model = draft.model;
     if (modelFamily !== "reasoning") {
       if (!tempInvalid && draft.temperature.trim() !== "" && tempNum !== detail.temperature) {
@@ -653,10 +689,14 @@ function EditableSkill({
 
   return (
     <div style={{ marginTop: "0.5rem" }}>
-      <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: "0 0 0.25rem" }}>{detail.name}</h2>
+      <h2 style={{ fontSize: "1.1rem", fontWeight: 600, margin: "0 0 0.25rem" }}>
+        {detail.name}
+        {decision && <DecisionBadge palette={p} />}
+      </h2>
       <div style={{ color: p.muted, fontSize: "0.8rem", marginBottom: "0.5rem" }}>
         {detail.id}
         {detail.tenantId === null ? " · global" : ""}
+        {decision ? ` · ${detail.model}` : ""}
       </div>
 
       {error && (
@@ -689,18 +729,29 @@ function EditableSkill({
       />
 
       <label style={labelStyle()} for="bb-prompt">
-        System prompt
+        {decision ? "Preamble" : "System prompt"}
       </label>
       <textarea
         id="bb-prompt"
-        aria-label="System prompt"
+        aria-label={decision ? "Preamble" : "System prompt"}
         value={draft.systemPrompt}
         rows={5}
         onInput={(e) => set("systemPrompt", (e.currentTarget as HTMLTextAreaElement).value)}
         style={inputStyle(p)}
       />
+      {decision && (
+        <div
+          data-testid="preamble-counter"
+          style={{ fontSize: "0.75rem", color: preambleTooLong ? p.danger : p.muted, textAlign: "right" }}
+        >
+          {draft.systemPrompt.length} / {DECISION_PREAMBLE_MAX}
+        </div>
+      )}
 
-      {/* #330 — Integration-first model picker + family-aware parameter panel */}
+      {decision ? (
+        <DecisionSpecView palette={p} detail={detail} />
+      ) : (
+      /* #330 — Integration-first model picker + family-aware parameter panel */
       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
         <div style={{ flex: 2, minWidth: "200px" }}>
           <IntegrationModelPicker
@@ -735,6 +786,7 @@ function EditableSkill({
           />
         )}
       </div>
+      )}
 
       {numericError && (
         <div role="alert" style={{ color: p.danger, fontSize: "0.8rem", marginTop: "0.4rem" }}>
@@ -749,11 +801,57 @@ function EditableSkill({
         {saved && !dirty && <span style={{ color: p.success, fontSize: "0.85rem" }}>Saved ✓</span>}
       </div>
 
-      <SubSkillsPanel api={api} palette={p} skillId={detail.id} />
-      <ToolsPanel api={api} palette={p} skillId={detail.id} />
+      {/* A decision skill refuses tools and sub-skills (422
+          decision_skill_no_tools / decision_skill_no_sub_skills). */}
+      {!decision && <SubSkillsPanel api={api} palette={p} skillId={detail.id} />}
+      {!decision && <ToolsPanel api={api} palette={p} skillId={detail.id} />}
       <ParametersPanel api={api} palette={p} skillId={detail.id} />
-      <PerRoleModelPanel api={api} palette={p} skillId={detail.id} catalog={catalog} />
+      <PerRoleModelPanel
+        api={api}
+        palette={p}
+        skillId={detail.id}
+        catalog={catalog}
+        decisionSkill={decision}
+      />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// baobox#846 — a decision skill's question spec, read-only. Studio has no spec
+// editor (minimal decision-skill support); the questions, the decision model
+// and its integration are managed in the BaoBox Portal.
+// ---------------------------------------------------------------------------
+function DecisionSpecView({ palette: p, detail }: { palette: Palette; detail: SkillDetail }) {
+  const spec = detail.decisionSpec ?? null;
+  return (
+    <section>
+      <h3 style={sectionTitle()}>Decision questions</h3>
+      <div role="note" style={{ fontSize: "0.8rem", color: p.muted, margin: "0 0 0.5rem" }}>
+        Read-only here. Edit the questions, the decision model and its integration in the BaoBox
+        Portal.
+      </div>
+      {spec ? (
+        <pre
+          aria-label="Decision spec"
+          style={{
+            whiteSpace: "pre-wrap",
+            background: p.card,
+            border: `1px solid ${p.border}`,
+            borderRadius: "6px",
+            padding: "0.5rem",
+            fontSize: "0.8rem",
+            margin: 0,
+            maxHeight: "24rem",
+            overflow: "auto",
+          }}
+        >
+          {JSON.stringify(spec, null, 2)}
+        </pre>
+      ) : (
+        <p style={{ color: p.muted, fontSize: "0.85rem" }}>No question spec returned for this skill.</p>
+      )}
+    </section>
   );
 }
 
