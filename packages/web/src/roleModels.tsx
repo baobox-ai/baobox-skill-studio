@@ -31,6 +31,7 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect, useRef, useState } from "preact/hooks";
+import { ROLE_MODELS_SHAPE_ERROR, skillRoleModelsMapSchema } from "@baobox/skill-builder-contract";
 import type { PutRoleModelsRequest, SkillRoleModelsMap, SkillStudioApi } from "./api.js";
 import type { CatalogProvider } from "./modelCatalog.js";
 import type { Palette } from "./theme.js";
@@ -64,21 +65,40 @@ export function hasDecisionEntry(chain: StoredChain): boolean {
   return chain.some((e) => e.mode === "decision");
 }
 
+const KEEP_NOTE = "Shown read-only so Studio never replaces it.";
+
 // Why a stored chain is read-only in Studio, or null when Studio can edit it.
 // Studio can only write `guardEntry` shapes, so anything else is preserved by
 // refusing to save over it.
 export function readOnlyReason(chain: StoredChain): string | null {
   if (hasDecisionEntry(chain)) {
-    return "Decision-model pin — set in the Portal (decision model). Shown read-only so Studio never replaces it.";
+    return `Decision-model pin — set in the Portal (decision model). ${KEEP_NOTE}`;
   }
-  const foreign = chain.some(
-    (e) => e.llmSource !== "tenant_default" || e.llmIntegrationId !== null || !e.model,
-  );
-  if (foreign) {
-    return "Pinned to a specific LLM integration — set in the Portal. Shown read-only so Studio never replaces it.";
+  if (chain.some((e) => e.llmIntegrationId !== null)) {
+    return `Pinned to a specific LLM integration — set in the Portal. ${KEEP_NOTE}`;
+  }
+  if (chain.some((e) => e.llmSource === "platform")) {
+    return `Runs on the platform key — set in the Portal. ${KEEP_NOTE}`;
+  }
+  if (chain.some((e) => !e.model)) {
+    return `Uses the integration's default model — set in the Portal. ${KEEP_NOTE}`;
+  }
+  if (chain.some((e) => e.llmSource !== "tenant_default")) {
+    return `Set in the Portal in a form Studio can't edit. ${KEEP_NOTE}`;
   }
   return null;
 }
+
+// Value identity of a stored chain: a reload that returns the same entries
+// (new array, same content) must not reset a row.
+function chainKey(chain: StoredChain): string {
+  return JSON.stringify(
+    chain.map((e) => [e.llmSource, e.llmIntegrationId, e.model, e.mode ?? "chat"]),
+  );
+}
+
+const REPLACED_NOTE =
+  "The saved models for this role changed, so your unsaved selection was replaced with the saved ones.";
 
 function entryLabel(e: StoredChain[number]): string {
   const model = e.model ?? "(provider default)";
@@ -87,7 +107,7 @@ function entryLabel(e: StoredChain[number]): string {
 
 // Caption under each guard slot (baobox#827 same-provider rule).
 const TENANT_DEFAULT_CAPTION =
-  "Runs on your tenant's default LLM integration. If the model you pick is from a different provider than that integration, the integration's default model is used instead.";
+  "Runs on your tenant's default LLM integration. If the model you pick belongs to a different provider than that integration, the integration's default model is used instead (or that provider's default model when the integration has none).";
 
 // ---------------------------------------------------------------------------
 // Flat model <select> from the catalog — catalog-driven, no free-text (guard
@@ -159,23 +179,33 @@ function GuardRoleRow({
   const lockedReason = readOnlyReason(chain);
   const locked = lockedReason !== null;
 
-  // Re-seed local state when the server chain changes (e.g. after a reload).
-  // Skipped for the chain the state was already seeded from, so a selection
-  // made before the mount effect runs is not wiped.
-  const seededFrom = useRef(chain);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — seed from prop
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Re-seed local state only when this role's STORED chain changes by value
+  // (a reload returns new arrays for every role; siblings must keep their
+  // unsaved edits). If the user had an unsaved edit that the new stored
+  // chain overrides, say so instead of discarding it silently.
+  const key = chainKey(chain);
+  const seeded = useRef({ key, primary: chain[0]?.model ?? "", backup: chain[1]?.model ?? "" });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reseed on stored-chain value change only
   useEffect(() => {
-    if (seededFrom.current === chain) return;
-    seededFrom.current = chain;
-    setPrimary(chain[0]?.model ?? "");
-    setBackup(chain[1]?.model ?? "");
+    if (seeded.current.key === key) return;
+    const next = { key, primary: chain[0]?.model ?? "", backup: chain[1]?.model ?? "" };
+    const edited = primary !== seeded.current.primary || backup !== seeded.current.backup;
+    seeded.current = next;
+    // Already showing the new stored values (e.g. this row's own save).
+    if (primary === next.primary && backup === next.backup) return;
+    setPrimary(next.primary);
+    setBackup(next.backup);
     setSaved(false);
-  }, [chain]);
+    if (edited) setNotice(REPLACED_NOTE);
+  }, [key]);
 
   async function save(chainEntries: PutRoleModelsRequest["chain"]) {
     // Never write over a chain Studio can't represent (also guards a
     // programmatic click on the disabled buttons).
     if (locked) return;
+    setNotice(null);
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -215,6 +245,11 @@ function GuardRoleRow({
           {error}
         </div>
       )}
+      {notice && (
+        <div role="status" data-testid={`${roleKey}-notice`} style={{ fontSize: "0.8rem", marginBottom: "0.4rem" }}>
+          {notice}
+        </div>
+      )}
 
       {locked ? (
         <div role="note" data-testid={`${roleKey}-readonly`} style={{ fontSize: "0.78rem", margin: "0 0 0.5rem", opacity: 0.75 }}>
@@ -232,7 +267,7 @@ function GuardRoleRow({
           <CatalogSelect
             id={`${roleKey}-primary`}
             value={primary}
-            onChange={(v) => { setPrimary(v); setSaved(false); }}
+            onChange={(v) => { setPrimary(v); setSaved(false); setNotice(null); }}
             catalog={catalog}
             palette={p}
             disabled={saving || locked}
@@ -246,7 +281,7 @@ function GuardRoleRow({
           <CatalogSelect
             id={`${roleKey}-backup`}
             value={backup}
-            onChange={(v) => { setBackup(v); setSaved(false); }}
+            onChange={(v) => { setBackup(v); setSaved(false); setNotice(null); }}
             catalog={catalog}
             palette={p}
             disabled={saving || locked || !primary}
@@ -305,17 +340,26 @@ function MainBackupRow({
   const lockedReason = readOnlyReason(chain);
   const locked = lockedReason !== null;
 
-  const seededFrom = useRef(chain);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — seed from prop
+  const [notice, setNotice] = useState<string | null>(null);
+
+  // Same value-based reseed as GuardRoleRow.
+  const key = chainKey(chain);
+  const seeded = useRef({ key, backup: chain[0]?.model ?? "" });
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional — reseed on stored-chain value change only
   useEffect(() => {
-    if (seededFrom.current === chain) return;
-    seededFrom.current = chain;
-    setBackup(chain[0]?.model ?? "");
+    if (seeded.current.key === key) return;
+    const next = { key, backup: chain[0]?.model ?? "" };
+    const edited = backup !== seeded.current.backup;
+    seeded.current = next;
+    if (backup === next.backup) return;
+    setBackup(next.backup);
     setSaved(false);
-  }, [chain]);
+    if (edited) setNotice(REPLACED_NOTE);
+  }, [key]);
 
   async function save(chainEntries: PutRoleModelsRequest["chain"]) {
     if (locked) return;
+    setNotice(null);
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -355,6 +399,11 @@ function MainBackupRow({
           {error}
         </div>
       )}
+      {notice && (
+        <div role="status" data-testid="main-notice" style={{ fontSize: "0.8rem", marginBottom: "0.4rem" }}>
+          {notice}
+        </div>
+      )}
 
       <div style={{ marginBottom: "0.5rem" }}>
         <label style={labelStyle()} for="main-backup">
@@ -363,7 +412,7 @@ function MainBackupRow({
         <CatalogSelect
           id="main-backup"
           value={backup}
-          onChange={(v) => { setBackup(v); setSaved(false); }}
+          onChange={(v) => { setBackup(v); setSaved(false); setNotice(null); }}
           catalog={catalog}
           palette={p}
           disabled={saving || locked}
@@ -420,24 +469,31 @@ export function PerRoleModelPanel({
    */
   decisionSkill?: boolean;
 }) {
+  // FAIL CLOSED (baobox#846): rows are rendered only from a map that was
+  // positively loaded AND validated. `null` = unknown (loading, failed, or
+  // the payload was not the role map) — no row, no Save. Never substitute
+  // empty chains: that would read a stored decision / Portal pin as
+  // "inherits tenant default" and let a Save overwrite it.
   const [roleModels, setRoleModels] = useState<SkillRoleModelsMap | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  // Derive a full map with safe empty-array defaults for every role so child
-  // rows never have to handle `undefined`.
-  const safeMap: SkillRoleModelsMap = {
-    main: roleModels?.main ?? [],
-    preflight_guard: roleModels?.preflight_guard ?? [],
-    postflight_guard: roleModels?.postflight_guard ?? [],
-    eval_judge: roleModels?.eval_judge ?? [],
-  };
+  const [loading, setLoading] = useState(true);
 
   async function load() {
+    setLoading(true);
     setLoadError(null);
     try {
-      setRoleModels(await api.getRoleModels(skillId));
+      const raw: unknown = await api.getRoleModels(skillId);
+      if (!skillRoleModelsMapSchema.safeParse(raw).success) {
+        setRoleModels(null);
+        setLoadError(ROLE_MODELS_SHAPE_ERROR);
+        return;
+      }
+      setRoleModels(raw as SkillRoleModelsMap);
     } catch (err) {
+      setRoleModels(null);
       setLoadError(msgOf(err));
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -465,14 +521,19 @@ export function PerRoleModelPanel({
 
       {loadError && (
         <div role="alert" style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}>
-          {loadError}
+          Couldn't load the per-role models, so they can't be edited: {loadError}{" "}
+          <button type="button" disabled={loading} onClick={() => void load()} style={ghostBtn(p)}>
+            Retry
+          </button>
         </div>
       )}
 
-      {roleModels === null && !loadError ? (
-        <div style={{ ...cardStyle(p), color: "inherit", opacity: 0.6, fontSize: "0.85rem" }}>
-          Loading…
-        </div>
+      {roleModels === null ? (
+        loadError ? null : (
+          <div style={{ ...cardStyle(p), color: "inherit", opacity: 0.6, fontSize: "0.85rem" }}>
+            Loading…
+          </div>
+        )
       ) : (
         <div style={{ ...cardStyle(p), display: "grid", gap: "0.75rem" }}>
           {decisionSkill && (
@@ -486,7 +547,7 @@ export function PerRoleModelPanel({
               key={r.key}
               label={r.label}
               roleKey={r.key}
-              chain={safeMap[r.key]}
+              chain={roleModels[r.key]}
               catalog={catalog}
               palette={p}
               onSave={handleSave}
@@ -494,7 +555,7 @@ export function PerRoleModelPanel({
           ))}
           {!decisionSkill && (
             <MainBackupRow
-              chain={safeMap.main}
+              chain={roleModels.main}
               catalog={catalog}
               palette={p}
               onSave={handleSave}

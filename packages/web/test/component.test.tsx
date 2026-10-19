@@ -835,3 +835,168 @@ describe("<SkillStudio> decision skills (baobox#846)", () => {
     expect(screen.getByTestId("role-row-postflight_guard")).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review round 1 (baobox#846): fail closed on an unknown role-model map; keep
+// sibling rows' unsaved edits across a reload; locked-row copy; sub-skill
+// candidates exclude decision skills.
+// ---------------------------------------------------------------------------
+
+describe("<SkillStudio> per-role models — fail closed when the map is not positively loaded", () => {
+  it("a rejected GET shows the error + Retry, renders no editable row, and never PUTs", async () => {
+    const getRoleModels = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({ ...EMPTY_ROLES });
+    const api = mockApi({ getRoleModels });
+    await openFirstSkill(api);
+    expect(await screen.findByText(/Couldn't load the per-role models/)).toBeTruthy();
+    expect(screen.getByText(/network down/)).toBeTruthy();
+    expect(screen.queryByTestId("role-row-preflight_guard")).toBeNull();
+    expect(screen.queryByTestId("role-row-postflight_guard")).toBeNull();
+    expect(screen.queryByTestId("role-row-main")).toBeNull();
+    expect(api.putRoleModels).not.toHaveBeenCalled();
+    // Retry loads the map, and only then do the rows appear.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("role-row-preflight_guard")).toBeTruthy();
+    expect(getRoleModels).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/Couldn't load the per-role models/)).toBeNull();
+  });
+
+  it("the { skillId, roles } wrapper (an old @baobox/sdk behind the BFF) is a load failure naming the SDK requirement", async () => {
+    const api = mockApi({
+      getRoleModels: vi.fn(async () => ({
+        skillId: "sk_1",
+        roles: {
+          ...EMPTY_ROLES,
+          preflight_guard: [roleEntry({ role: "preflight_guard", llmIntegrationId: "tllm_dec", model: "jev-1.14.0", llmSource: "pinned", mode: "decision" })],
+        },
+      }) as unknown as SkillRoleModelsMap),
+    });
+    await openFirstSkill(api);
+    expect(await screen.findByText(/@baobox\/sdk 0\.32\.1 or later/)).toBeTruthy();
+    expect(screen.queryByTestId("role-row-preflight_guard")).toBeNull();
+    expect(screen.queryByTestId("role-row-main")).toBeNull();
+    expect(api.putRoleModels).not.toHaveBeenCalled();
+  });
+
+  it("a map missing a role, or with a non-array chain or an unknown mode, is a load failure too", async () => {
+    for (const bad of [
+      { main: [], preflight_guard: [], postflight_guard: [] },
+      { ...EMPTY_ROLES, postflight_guard: null },
+      { ...EMPTY_ROLES, preflight_guard: [roleEntry({ role: "preflight_guard", mode: "judge" as never })] },
+    ]) {
+      const api = mockApi({ getRoleModels: vi.fn(async () => bad as unknown as SkillRoleModelsMap) });
+      const { unmount } = render(<SkillStudio apiBase="/bff" api={api} />);
+      fireEvent.click(await screen.findByText("Invoice Chaser"));
+      expect(await screen.findByText(/not the expected role map/)).toBeTruthy();
+      expect(screen.queryByTestId("role-row-preflight_guard")).toBeNull();
+      expect(api.putRoleModels).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
+  it("a reload that fails after a save hides the rows again (no edits over an unknown map)", async () => {
+    const getRoleModels = vi
+      .fn()
+      .mockResolvedValueOnce({ ...EMPTY_ROLES })
+      .mockRejectedValueOnce(new Error("reload failed"));
+    const api = mockApi({ getRoleModels });
+    await openFirstSkill(api);
+    const row = await screen.findByTestId("role-row-preflight_guard");
+    fireEvent.change(within(row).getAllByRole("combobox")[0] as HTMLSelectElement, { target: { value: "gpt-5" } });
+    fireEvent.click(within(row).getByRole("button", { name: "Save" }));
+    expect(await screen.findByText(/reload failed/)).toBeTruthy();
+    expect(api.putRoleModels).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("role-row-preflight_guard")).toBeNull();
+    expect(screen.queryByTestId("role-row-postflight_guard")).toBeNull();
+  });
+});
+
+describe("<SkillStudio> per-role models — a reload resets only rows whose stored chain changed", () => {
+  it("saving one role keeps a sibling's unsaved selection (same stored chain, new array)", async () => {
+    const getRoleModels = vi
+      .fn()
+      .mockResolvedValueOnce({ ...EMPTY_ROLES, preflight_guard: [roleEntry({ role: "preflight_guard", model: "gpt-5" })] })
+      .mockResolvedValueOnce({
+        main: [],
+        preflight_guard: [roleEntry({ role: "preflight_guard", model: "o3" })],
+        postflight_guard: [],
+        eval_judge: [],
+      });
+    const api = mockApi({ getRoleModels });
+    await openFirstSkill(api);
+    const post = await screen.findByTestId("role-row-postflight_guard");
+    const postPrimary = within(post).getAllByRole("combobox")[0] as HTMLSelectElement;
+    fireEvent.change(postPrimary, { target: { value: "gpt-5-mini" } });
+
+    const pre = screen.getByTestId("role-row-preflight_guard");
+    const prePrimary = within(pre).getAllByRole("combobox")[0] as HTMLSelectElement;
+    await waitFor(() => expect(prePrimary.value).toBe("gpt-5"));
+    fireEvent.change(prePrimary, { target: { value: "o3" } });
+    fireEvent.click(within(pre).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(getRoleModels).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(within(pre).getByText("Saved ✓")).toBeTruthy());
+    // The sibling's unsaved pick survived the reload, with no notice.
+    expect((within(screen.getByTestId("role-row-postflight_guard")).getAllByRole("combobox")[0] as HTMLSelectElement).value).toBe("gpt-5-mini");
+    expect(screen.queryByTestId("postflight_guard-notice")).toBeNull();
+    expect(prePrimary.value).toBe("o3");
+  });
+
+  it("when a row's stored chain really changed under an unsaved edit, the edit is replaced WITH a visible notice", async () => {
+    const getRoleModels = vi
+      .fn()
+      .mockResolvedValueOnce({ ...EMPTY_ROLES })
+      .mockResolvedValueOnce({
+        ...EMPTY_ROLES,
+        preflight_guard: [roleEntry({ role: "preflight_guard", model: "gpt-5" })],
+        postflight_guard: [roleEntry({ role: "postflight_guard", model: "claude-sonnet-4-5" })],
+      });
+    const api = mockApi({ getRoleModels });
+    await openFirstSkill(api);
+    const post = await screen.findByTestId("role-row-postflight_guard");
+    fireEvent.change(within(post).getAllByRole("combobox")[0] as HTMLSelectElement, { target: { value: "gpt-5-mini" } });
+    const pre = screen.getByTestId("role-row-preflight_guard");
+    fireEvent.change(within(pre).getAllByRole("combobox")[0] as HTMLSelectElement, { target: { value: "gpt-5" } });
+    fireEvent.click(within(pre).getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByTestId("postflight_guard-notice")).toBeTruthy();
+    expect((within(screen.getByTestId("role-row-postflight_guard")).getAllByRole("combobox")[0] as HTMLSelectElement).value).toBe("claude-sonnet-4-5");
+    expect(screen.queryByTestId("preflight_guard-notice")).toBeNull();
+  });
+});
+
+describe("<SkillStudio> per-role models — locked-row copy names the real reason", () => {
+  it.each([
+    [{ llmSource: "platform" as const }, /Runs on the platform key/],
+    [{ model: null }, /Uses the integration's default model/],
+    [{ llmIntegrationId: "tllm_1", llmSource: "pinned" as const }, /Pinned to a specific LLM integration/],
+  ])("%o → %s", async (over, copy) => {
+    const api = mockApi({
+      getRoleModels: vi.fn(async () => ({ ...EMPTY_ROLES, preflight_guard: [roleEntry({ role: "preflight_guard", ...over })] })),
+    });
+    await openFirstSkill(api);
+    const note = await screen.findByTestId("preflight_guard-readonly");
+    expect(note.textContent).toMatch(copy);
+    const row = screen.getByTestId("role-row-preflight_guard");
+    expect((within(row).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe("<SkillStudio> sub-skill picker on a chat skill", () => {
+  it("does not offer decision skills as candidates (BaoBox refuses them on either side)", async () => {
+    const api = decisionApi({
+      listSkills: vi.fn(async () => [
+        { id: "sk_1", name: "Invoice Chaser", description: "d", model: "MiniMax-M2.7", tenantId: "t_1", updatedAt: "x", skillKind: "chat" as const },
+        { id: "sk_dec", name: "Inbox Triage", description: "d", model: "jev-1.14.0", tenantId: "t_1", updatedAt: "x", skillKind: "decision" as const },
+        { id: "sk_3", name: "Report Writer", description: "d", model: "MiniMax-M2.7", tenantId: "t_1", updatedAt: "x" },
+      ]),
+    });
+    render(<SkillStudio apiBase="/bff" api={api} />);
+    fireEvent.click(await screen.findByText("Invoice Chaser"));
+    const picker = (await screen.findByLabelText("Attach a sub-skill")) as HTMLSelectElement;
+    await waitFor(() => expect(within(picker).getByText("Report Writer (sk_3)")).toBeTruthy());
+    expect(within(picker).queryByText("Inbox Triage (sk_dec)")).toBeNull();
+  });
+});

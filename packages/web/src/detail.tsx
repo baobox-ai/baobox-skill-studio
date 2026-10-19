@@ -872,7 +872,11 @@ function SubSkillsPanel({ api, palette: p, skillId }: { api: SkillStudioApi; pal
       setAttached(children);
       const attachedIds = new Set(children.map((c) => c.id));
       // Offer every other skill as a candidate; the server still rejects a cycle.
-      setCandidates(all.filter((s) => s.id !== skillId && !attachedIds.has(s.id)));
+      // Decision skills are left out: BaoBox refuses a decision skill on either
+      // side of an attachment (422 decision_skill_no_sub_skills).
+      setCandidates(
+        all.filter((s) => s.id !== skillId && !attachedIds.has(s.id) && !isDecisionKind(s)),
+      );
     } catch (err) {
       setError(msgOf(err));
     }
