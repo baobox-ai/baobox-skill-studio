@@ -38,9 +38,11 @@ contract is the pinned interface between the BFF (`^0.9.0`) and the Web Componen
 additionally needs `@baobox/sdk@^0.32.1` (decision-skill fields, the role-model
 `mode`, and `LlmIntegration.defaultModel: string | null`). If your backend's
 `package.json` uses `overrides` for `@baobox/sdk`, move it to `^0.32.1` too —
-an override caps every package that depends on the SDK. Mixing an older BFF
-with the 0.8.0 web bundle drops `mode` from role-model writes (the old
-contract rejects the key) — keep the set aligned.
+an override caps every package that depends on the SDK. An older BFF rejects
+every role-model save from the 0.8.0 web bundle with 400 `validation_error`
+(its contract does not know `mode`), and an SDK older than 0.32.1 behind BFF
+0.9.0 makes `GET /skills/:id/role-models` fail with 502 `upstream_error` — keep
+the set aligned.
 
 > Phase 2 is **additive**: the Phase-1 endpoints keep their exact method+path, so
 > an existing Phase-1 integration keeps working after the upgrade — you opt into
@@ -422,7 +424,13 @@ declared in `@baobox/skill-builder-contract` as `ModelCatalogResponse`).
 Returns the full role → chain map for a skill. Requires `skills:read`. The
 `authz` hook sees `op="getRoleModels"` with `skillId`. Response shape is
 `Record<ModelRole, SkillRoleModel[]>` (re-exported from `@baobox/sdk` via the
-contract as `SkillRoleModelsMap`).
+contract as `SkillRoleModelsMap`). The BFF checks the SDK result against
+`skillRoleModelsMapSchema` (all four roles present, each an array of entries
+with a known `llmSource` / `mode`) and answers 502 `upstream_error` otherwise,
+for example when an `@baobox/sdk` older than 0.32.1 returns the
+`{ skillId, roles }` wrapper. The Web Component validates the response the
+same way and, if it fails, shows the error with a Retry button and no editable
+row: Studio never edits a role chain it hasn't loaded.
 
 ```jsonc
 // GET /skills/sk_abc/role-models
@@ -448,7 +456,7 @@ default). Each entry is `{ llmIntegrationId, model, llmSource, mode? }`:
 - **What Studio sends:** `{ "llmIntegrationId": null, "model": "<catalog id>",
   "llmSource": "tenant_default", "mode": "chat" }`. The entry runs on the
   tenant's default LLM integration; the model is used when it belongs to that
-  integration's provider, otherwise the integration's default model is used.
+  integration's provider, otherwise the integration's default model is used (or that provider's default when the integration has none).
 - **`llmSource: "pinned"` needs an `llmIntegrationId`** (an id from
   `GET /llm-integrations`). `pinned` with `llmIntegrationId: null` is rejected
   by BaoBox with 400 `invalid_role_model`. Studio releases before web 0.8.0 sent
@@ -487,8 +495,9 @@ completeness.
 
 A role whose saved chain Studio can't represent is shown **read-only** (selects,
 Save and Inherit default disabled): any `mode: "decision"` entry ("set in the
-Portal (decision model)"), or a chat entry pinned to a specific integration or
-the platform key. Studio would otherwise replace those entries with
+Portal (decision model)"), or a chat entry pinned to a specific integration, on
+the platform key, or on the integration's default model (`model: null`). The
+note names which. Studio would otherwise replace those entries with
 tenant-default ones. On a decision skill only `preflight_guard` is shown:
 BaoBox refuses a `main` pin (422 `decision_skill_no_main_pin`), and a decision
 skill's postflight guard never runs.
