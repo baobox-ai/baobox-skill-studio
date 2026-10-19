@@ -21,7 +21,7 @@ npm install @baobox/skill-builder-bff @baobox/sdk hono
 # @baobox/skill-builder-contract comes in as a dependency
 ```
 
-`@baobox/sdk@^0.32.0` is required from bff 0.9.0 (decision-skill fields and the
+`@baobox/sdk@^0.32.1` is required from bff 0.9.0 (decision-skill fields, the role-model map, and the
 role-model `mode`). Older bff releases need `^0.16.0` or later (the tenant-scoped
 `skills.*` reads/writes from #247 plus the #257 authoring ops: create /
 attach-sub-skill / attach-tool).

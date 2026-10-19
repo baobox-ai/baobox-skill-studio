@@ -1077,7 +1077,7 @@ describe("SDK 0.32.0 surfaces pass through the BFF (baobox#846)", () => {
     expect(stub.roleModelsCalls.put).not.toHaveBeenCalled();
   });
 
-  it("GET role-models unwraps BaoBox's { skillId, roles } wrapper (what the SDK actually returns) to the bare role map", async () => {
+  it("GET role-models returns the bare role map the SDK (>= 0.32.1) yields — never a { skillId, roles } wrapper", async () => {
     const roles = {
       main: [],
       preflight_guard: [
@@ -1086,12 +1086,15 @@ describe("SDK 0.32.0 surfaces pass through the BFF (baobox#846)", () => {
       postflight_guard: [],
       eval_judge: [],
     };
-    // Real server body is { data: { skillId, roles } }; SDK ≤0.32.0 returns body.data verbatim.
-    const stub = makeStub({ roleModelsGet: async () => ({ skillId: "sk_1", roles }) });
+    // BaoBox answers { data: { skillId, roles } }; SDK 0.32.1 unwraps to `roles`.
+    const stub = makeStub({ roleModelsGet: async () => roles });
     const app = makeBff(stub);
     const res = await app.request("/skills/sk_1/role-models");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(roles);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual(roles);
+    expect(body).not.toHaveProperty("roles");
+    expect(body).not.toHaveProperty("skillId");
   });
 
   it("GET role-models returns each entry's mode", async () => {

@@ -27,7 +27,7 @@ Your backend:  @baobox/skill-builder-bff  ──(apiKey, tenant-scoped)──▶
 
 | Package | Version | Where it runs | Role |
 | ------- | ------- | ------------- | ---- |
-| [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.32.0` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257 + model catalog #320 + per-role models #328 + decision skills / role-model `mode`) |
+| [`@baobox/sdk`](https://www.npmjs.com/package/@baobox/sdk) | `^0.32.1` | your backend | BaoBox HTTP client (tenant-scoped skills #247 + authoring ops #257 + model catalog #320 + per-role models #328 + decision skills / role-model `mode`) |
 | [`@baobox/skill-builder-contract`](https://www.npmjs.com/package/@baobox/skill-builder-contract) | `^0.8.0` | both | shared BFF↔MFE HTTP contract (types + Zod) |
 | [`@baobox/skill-builder-bff`](https://www.npmjs.com/package/@baobox/skill-builder-bff) | `^0.9.0` | your backend | mountable Hono BFF router |
 | [`@baobox/skill-builder`](https://www.npmjs.com/package/@baobox/skill-builder) | `^0.8.0` | browser | `<baobox-skill-builder>` Web Component |
@@ -35,9 +35,9 @@ Your backend:  @baobox/skill-builder-bff  ──(apiKey, tenant-scoped)──▶
 These four versions are a **compatibility set** — install them together. The
 contract is the pinned interface between the BFF (`^0.9.0`) and the Web Component
 (`^0.8.0`); both depend on `@baobox/skill-builder-contract@^0.8.0`, and the BFF
-additionally needs `@baobox/sdk@^0.32.0` (decision-skill fields, the role-model
+additionally needs `@baobox/sdk@^0.32.1` (decision-skill fields, the role-model
 `mode`, and `LlmIntegration.defaultModel: string | null`). If your backend's
-`package.json` uses `overrides` for `@baobox/sdk`, move it to `^0.32.0` too —
+`package.json` uses `overrides` for `@baobox/sdk`, move it to `^0.32.1` too —
 an override caps every package that depends on the SDK. Mixing an older BFF
 with the 0.8.0 web bundle drops `mode` from role-model writes (the old
 contract rejects the key) — keep the set aligned.

@@ -2,18 +2,19 @@
 
 ## 0.9.0
 
-Depend on `@baobox/sdk` `^0.32.0` and `@baobox/skill-builder-contract`
+Depend on `@baobox/sdk` `^0.32.1` and `@baobox/skill-builder-contract`
 `^0.8.0`. Refs baobox#846. No route added or removed.
 
 ### Fixed
 
 - `GET /skills/:id/role-models` returned BaoBox's `{ skillId, roles }` wrapper
   instead of the bare role map the contract declares. The server answers
-  `{ data: { skillId, roles } }` and `@baobox/sdk` (through 0.32.0) hands back
-  `data` unchanged, so the Studio panel read every stored chain as empty. The
-  BFF now unwraps `roles` (a bare map is still passed through, so a future SDK
-  fix is harmless). The web 0.8.0 read-only guard for decision pins needs this:
-  without it a decision pin looked like "Inherits tenant default".
+  `{ data: { skillId, roles } }` and `@baobox/sdk` up to 0.32.0 handed back
+  `data` unchanged, so the Studio panel read every stored chain as empty.
+  `@baobox/sdk` 0.32.1 returns `data.roles`; the BFF requires `^0.32.1` and
+  forwards the map unchanged (the response shape is the same role map). The
+  web 0.8.0 read-only guard for decision pins depends on this: with the
+  wrapper, a decision pin looked like "Inherits tenant default".
 
 ### Changed
 
