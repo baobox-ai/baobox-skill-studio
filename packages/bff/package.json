@@ -42,7 +42,7 @@
   },
   "dependencies": {
     "@baobox/sdk": "^0.32.0",
-    "@baobox/skill-builder-contract": "^0.7.0"
+    "@baobox/skill-builder-contract": "^0.8.0"
   },
   "peerDependencies": {
     "hono": ">=4"

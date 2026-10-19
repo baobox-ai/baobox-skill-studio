@@ -50,10 +50,19 @@ skillStudioRoutes.getSkill.build("sk_default"); // "/skills/sk_default"
 
 ## Shapes
 
-- **`SkillSummary`** — lean list row: `{ id, name, description, model, tenantId, updatedAt }`
+- **`SkillSummary`** — lean list row: `{ id, name, description, model, tenantId, updatedAt, skillKind? }`
   (a strict subset of `@baobox/sdk`'s `Skill`; use `toSkillSummary(skill)`).
+  `skillKind` is present only when the server sends it (absent = chat).
 - **`SkillDetail`** — re-export of `@baobox/sdk`'s `SkillWithFiles`
-  (full skill + `files: { path, size }[]`).
+  (full skill + `files: { path, size }[]`), including `skillKind` and, for a
+  decision skill, its `decisionSpec` (SDK `DecisionSkillSpec`). Studio treats
+  both as read-only; the write schemas do not accept them.
+- **`PutRoleModelsRequest`** — `{ role, chain }`; each chain entry is
+  `{ llmIntegrationId, model, llmSource, mode? }` (`.strict()`). A `pinned`
+  entry needs an `llmIntegrationId` (the server returns 400 `invalid_role_model`
+  otherwise); with no integration, send `llmSource: "tenant_default"`.
+  `mode: "decision"` is accepted by the schema but the server allows it only on
+  guard roles with a pinned decision-capable integration.
 - **`SkillUpdateRequest`** — **exactly one** editable field per request
   (Phase 1 is a single-field edit), chosen from `name`, `description`,
   `systemPrompt`, `model`, `temperature`, `maxTokens`. The schema is `.strict()`
@@ -73,5 +82,5 @@ provided for the BFF to validate/normalize its own output and for tests.
 
 ## Versioning
 
-`0.1.0`. Published from the `baobox-skill-studio` monorepo via a tag-driven
+`0.8.0`. Published from the `baobox-skill-studio` monorepo via a tag-driven
 release (`contract-v*` → GitHub Actions → npm), mirroring `@baobox/sdk`.

@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.8.0
+
+Track `@baobox/sdk` 0.32.0 (decision skills, decision-model role pins). Refs
+baobox#846. **Additive except one type widening (see Changed).**
+
+### Added
+
+- `roleModelChainEntrySchema` accepts an optional `mode: "chat" | "decision"`
+  (still `.strict()`; an unknown key is still rejected). An omitted `mode` stays
+  omitted so the server can infer it. New `ROLE_MODEL_MODES` tuple and a
+  re-exported `RoleModelMode` type.
+- `skillDetailSchema` carries `skillKind` and `decisionSpec` (both optional),
+  so a parse keeps them instead of stripping them. `skillSummarySchema` and
+  `toSkillSummary` carry `skillKind` (copied only when the server sent it) for
+  the list badge; the summary never carries the spec.
+- `SKILL_KINDS`, `skillKindSchema`, `isDecisionSkill()`, and re-exported
+  `SkillKind` / `DecisionSkillSpec` types.
+
+### Changed
+
+- `llmIntegrationSchema.defaultModel` is now `string | null` (was `string`),
+  matching SDK 0.32.0. The server has always allowed an integration with no
+  default model, so a parse of such a row used to fail.
+
+### Unchanged on purpose
+
+- The write schemas (`skillCreateRequestSchema`, `skillUpdateRequestSchema`,
+  `skillStructuralUpdateRequestSchema`) do not accept `skillKind` or
+  `decisionSpec`: Studio does not create or edit decision skills (the kind is
+  immutable server-side, and the spec is edited in the BaoBox Portal).
+- `llmCatalogProviderSchema.defaultModel` stays `string`: the catalog route and
+  the SDK's `LlmCatalogProvider` still type it as a string.
+
+### Docs
+
+- The `roleModelChainEntrySchema` doc comment no longer describes
+  `{ llmIntegrationId: null, llmSource: "pinned" }` as Studio's body: the server
+  has always rejected that with 400 `invalid_role_model`.
+
 ## 0.7.1
 
 Metadata refresh, no API change.
