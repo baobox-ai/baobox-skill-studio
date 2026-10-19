@@ -8,6 +8,7 @@ import {
   isDecisionSkill,
   listLlmIntegrationsResponseSchema,
   llmIntegrationSchema,
+  skillRoleModelsMapSchema,
   attachSubSkillRequestSchema,
   attachToolRequestSchema,
   contractErrorSchema,
@@ -658,5 +659,43 @@ describe("llmIntegrationSchema — nullable defaultModel (0.8.0)", () => {
     expect(llmIntegrationSchema.safeParse({ ...row, defaultModel: "gpt-5.4" }).success).toBe(true);
     const { defaultModel: _d, ...missing } = row;
     expect(llmIntegrationSchema.safeParse(missing).success).toBe(false);
+  });
+});
+
+describe("skillRoleModelsMapSchema — the GET role-models shape (fail closed)", () => {
+  const entry = {
+    skillId: "sk_1",
+    role: "preflight_guard",
+    position: 0,
+    llmIntegrationId: "tllm_dec",
+    model: "jev-1.14.0",
+    llmSource: "pinned",
+    mode: "decision",
+  };
+  const map = { main: [], preflight_guard: [entry], postflight_guard: [], eval_judge: [] };
+
+  it("accepts the bare role map and keeps server fields (skillId/role/position) on parse", () => {
+    const r = skillRoleModelsMapSchema.safeParse(map);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.preflight_guard[0]).toEqual(entry);
+  });
+
+  it("rejects the { skillId, roles } wrapper an older @baobox/sdk returned", () => {
+    expect(skillRoleModelsMapSchema.safeParse({ skillId: "sk_1", roles: map }).success).toBe(false);
+  });
+
+  it("rejects a missing role, a non-array chain, an unknown mode or llmSource, and a missing entry field", () => {
+    const { eval_judge: _e, ...missing } = map;
+    expect(skillRoleModelsMapSchema.safeParse(missing).success).toBe(false);
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, main: null }).success).toBe(false);
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, preflight_guard: [{ ...entry, mode: "judge" }] }).success).toBe(false);
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, preflight_guard: [{ ...entry, llmSource: "byok" }] }).success).toBe(false);
+    const { model: _m, ...noModel } = entry;
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, preflight_guard: [noModel] }).success).toBe(false);
+  });
+
+  it("accepts an entry without mode (older server) — the panel then treats it as chat", () => {
+    const { mode: _mode, ...noMode } = entry;
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, preflight_guard: [noMode] }).success).toBe(true);
   });
 });

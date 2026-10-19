@@ -2,8 +2,9 @@
 
 ## 0.8.0
 
-Track `@baobox/sdk` 0.32.0 (decision skills, decision-model role pins). Refs
-baobox#846. **Additive except one type widening (see Changed).**
+Track `@baobox/sdk` 0.32.x (types from 0.32.0; pinned `^0.32.1`, which
+returns the role-model map unwrapped). Decision skills and decision-model role
+pins. Refs baobox#846. **Additive except one type widening (see Changed).**
 
 ### Added
 
@@ -17,6 +18,13 @@ baobox#846. **Additive except one type widening (see Changed).**
   the list badge; the summary never carries the spec.
 - `SKILL_KINDS`, `skillKindSchema`, `isDecisionSkill()`, and re-exported
   `SkillKind` / `DecisionSkillSpec` types.
+- `skillRoleModelsMapSchema` (+ `storedRoleModelEntrySchema`,
+  `ROLE_MODELS_SHAPE_ERROR`): the `GET /skills/:id/role-models` response. All
+  four roles are required and each must be an array of entries with a known
+  `llmSource` / `mode`; server fields pass through. The `{ skillId, roles }`
+  wrapper from `@baobox/sdk` < 0.32.1 does not parse. The BFF and the Web
+  Component use it to fail closed: a payload that does not parse is a load
+  error, never "empty chains".
 
 ### Changed
 

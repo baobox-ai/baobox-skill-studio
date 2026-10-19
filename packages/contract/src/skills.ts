@@ -93,6 +93,45 @@ export const putRoleModelsRequestSchema = z
   .strict();
 export type PutRoleModelsRequest = z.infer<typeof putRoleModelsRequestSchema>;
 
+/**
+ * One stored entry as `GET /skills/:id/role-models` returns it. Only the fields
+ * Studio decides on are required (the read-only rule looks at all four); the
+ * server's `skillId` / `role` / `position` pass through untouched. An unknown
+ * `llmSource` or `mode` fails the parse on purpose: Studio must not edit a
+ * chain it does not understand.
+ */
+export const storedRoleModelEntrySchema = z
+  .object({
+    llmIntegrationId: z.string().nullable(),
+    model: z.string().nullable(),
+    llmSource: z.enum(["tenant_default", "platform", "pinned"]),
+    mode: z.enum(ROLE_MODEL_MODES).optional(),
+  })
+  .passthrough();
+
+/**
+ * `GET /skills/:id/role-models` response: the bare role → chain map, every role
+ * present (an empty array = inherits the tenant default). Non-strict so a
+ * future role is tolerated, but all four known roles are required — the
+ * `{ skillId, roles }` wrapper that `@baobox/sdk` < 0.32.1 returned does NOT
+ * parse. The BFF validates the SDK output with this and the Web Component
+ * validates the BFF response with it; a failure is a load error (fail closed),
+ * never "empty chains".
+ */
+export const skillRoleModelsMapSchema = z
+  .object({
+    main: z.array(storedRoleModelEntrySchema),
+    preflight_guard: z.array(storedRoleModelEntrySchema),
+    postflight_guard: z.array(storedRoleModelEntrySchema),
+    eval_judge: z.array(storedRoleModelEntrySchema),
+  })
+  .passthrough();
+
+/** Message for a role-model payload that is not the role map. */
+export const ROLE_MODELS_SHAPE_ERROR =
+  "Role-model data is not the expected role map, so Studio will not edit any role. " +
+  "The Skill Studio BFF needs @baobox/sdk 0.32.1 or later (check any overrides[\"@baobox/sdk\"] in the host app).";
+
 // ---------------------------------------------------------------------------
 // Reasoning effort — the new optional parameter for reasoning-class models
 // (gpt-5 family, o-series). `minimal` is the lowest tier (below `low`).
