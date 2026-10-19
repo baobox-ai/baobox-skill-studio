@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.9.0
+
+Depend on `@baobox/sdk` `^0.32.1` and `@baobox/skill-builder-contract`
+`^0.8.0`. Refs baobox#846. No route added or removed.
+
+### Fixed
+
+- `GET /skills/:id/role-models` returned BaoBox's `{ skillId, roles }` wrapper
+  instead of the bare role map the contract declares. The server answers
+  `{ data: { skillId, roles } }` and `@baobox/sdk` up to 0.32.0 handed back
+  `data` unchanged, so the Studio panel read every stored chain as empty.
+  `@baobox/sdk` 0.32.1 returns `data.roles`; the BFF requires `^0.32.1` and
+  forwards the map unchanged (the response shape is the same role map). The
+  web 0.8.0 read-only guard for decision pins depends on this: with the
+  wrapper, a decision pin looked like "Inherits tenant default".
+- `GET /skills/:id/role-models` fails closed. The SDK result is checked
+  against the contract's `skillRoleModelsMapSchema`; anything else (the
+  `{ skillId, roles }` wrapper from an older SDK that a host's own
+  `overrides["@baobox/sdk"]` forces, a missing role, a non-array chain, an
+  unknown `mode`) returns 502 `upstream_error` with a message naming the
+  `@baobox/sdk` 0.32.1 requirement, instead of a payload the panel would read
+  as empty chains.
+
+### Changed
+
+- `PUT /skills/:id/role-models` forwards each chain entry's optional `mode`
+  (`"chat"` / `"decision"`) to BaoBox. The contract used to reject the key, so
+  a client could not send it. An omitted `mode` stays omitted, so BaoBox infers
+  it (an existing decision pin keeps its mode). Unknown keys on an entry are
+  still a 400 `validation_error`.
+- `GET /skills/:id/role-models` returns each entry's `mode` as BaoBox sends it.
+- `GET /skills` list rows carry `skillKind` when BaoBox sends it (used for the
+  decision-skill badge). `GET /skills/:id` returns `skillKind` and
+  `decisionSpec` as they arrive from the SDK. `PUT`/`PATCH /skills/:id` still
+  refuse both keys (400): Studio does not change a skill's kind or spec.
+- `GET /llm-integrations` passes `defaultModel: null` through (SDK 0.32.x
+  widened the type to `string | null`).
+
 ## 0.8.1
 
 Metadata refresh, no API change.

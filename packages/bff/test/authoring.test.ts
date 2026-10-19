@@ -715,7 +715,7 @@ describe("getRoleModels — GET /skills/:id/role-models (#328)", () => {
   it("returns the full role map from the SDK", async () => {
     const ROLE_MAP = {
       main: [],
-      preflight_guard: [{ skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }],
+      preflight_guard: [{ skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: null, model: "openai/gpt-5", llmSource: "tenant_default", mode: "chat" }],
       postflight_guard: [],
       eval_judge: [],
     };
@@ -763,19 +763,19 @@ describe("getRoleModels — GET /skills/:id/role-models (#328)", () => {
 
 describe("putRoleModels — PUT /skills/:id/role-models (#328)", () => {
   it("calls SDK roleModels.put and returns the result", async () => {
-    const PUT_RESULT = { role: "preflight_guard", chain: [{ skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }] };
+    const PUT_RESULT = { role: "preflight_guard", chain: [{ skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: null, model: "openai/gpt-5", llmSource: "tenant_default", mode: "chat" }] };
     const stub = makeStub({ roleModelsPut: async () => PUT_RESULT });
     const app = makeBff(stub);
     const res = await putJson(app, "/skills/sk_1/role-models", {
       role: "preflight_guard",
-      chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }],
+      chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "tenant_default", mode: "chat" }],
     });
     expect(res.status).toBe(200);
     const body = await res.json() as typeof PUT_RESULT;
     expect(body.role).toBe("preflight_guard");
     expect(stub.roleModelsCalls.put).toHaveBeenCalledWith(
       "sk_1",
-      { role: "preflight_guard", chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }] },
+      { role: "preflight_guard", chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "tenant_default", mode: "chat" }] },
       { tenantId: TENANT },
     );
   });
@@ -801,7 +801,7 @@ describe("putRoleModels — PUT /skills/:id/role-models (#328)", () => {
   it("rejects a chain exceeding 4 entries with 400", async () => {
     const stub = makeStub();
     const app = makeBff(stub);
-    const entry = { llmIntegrationId: null, model: "m", llmSource: "pinned" };
+    const entry = { llmIntegrationId: null, model: "m", llmSource: "tenant_default" };
     const res = await putJson(app, "/skills/sk_1/role-models", {
       role: "preflight_guard",
       chain: [entry, entry, entry, entry, entry],
@@ -1004,5 +1004,182 @@ describe("listIntegrationModels — GET /llm-integrations/:id/models (#330)", ()
     expect(records).toContainEqual(
       expect.objectContaining({ op: "listIntegrationModels", tenantId: TENANT, outcome: "allowed" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SDK 0.32.0 pass-through (baobox#846, bff 0.9.0): role-model `mode`,
+// decision skills, nullable integration `defaultModel`.
+// ---------------------------------------------------------------------------
+describe("SDK 0.32.0 surfaces pass through the BFF (baobox#846)", () => {
+  const decisionSpec = {
+    version: 1 as const,
+    questions: [{ id: "urgent", type: "boolean" as const, prompt: "Is it urgent?" }],
+  };
+
+  it("PUT role-models forwards the Studio guard-slot body verbatim (tenant_default + model + mode chat)", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const chain = [
+      { llmIntegrationId: null, model: "gpt-5.4", llmSource: "tenant_default", mode: "chat" },
+      { llmIntegrationId: null, model: "gpt-5.4-mini", llmSource: "tenant_default", mode: "chat" },
+    ];
+    const res = await putJson(app, "/skills/sk_1/role-models", { role: "preflight_guard", chain });
+    expect(res.status).toBe(200);
+    expect(stub.roleModelsCalls.put).toHaveBeenCalledWith(
+      "sk_1",
+      { role: "preflight_guard", chain },
+      { tenantId: TENANT },
+    );
+  });
+
+  it("PUT role-models forwards mode: decision unchanged (the contract no longer strips or rejects it)", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const chain = [{ llmIntegrationId: "tllm_dec", model: null, llmSource: "pinned", mode: "decision" }];
+    const res = await putJson(app, "/skills/sk_1/role-models", { role: "preflight_guard", chain });
+    expect(res.status).toBe(200);
+    const forwarded = stub.roleModelsCalls.put.mock.calls[0]?.[1] as { chain: Array<Record<string, unknown>> };
+    expect(forwarded.chain[0]).toEqual(chain[0]);
+  });
+
+  it("PUT role-models does not invent a mode when the caller omits it", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    await putJson(app, "/skills/sk_1/role-models", {
+      role: "postflight_guard",
+      chain: [{ llmIntegrationId: "tllm_1", model: "gpt-5.4", llmSource: "pinned" }],
+    });
+    const forwarded = stub.roleModelsCalls.put.mock.calls[0]?.[1] as { chain: Array<Record<string, unknown>> };
+    expect("mode" in (forwarded.chain[0] ?? {})).toBe(false);
+  });
+
+  it("PUT role-models still 400s an unknown key on a chain entry (strictness kept)", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const res = await putJson(app, "/skills/sk_1/role-models", {
+      role: "preflight_guard",
+      chain: [{ llmIntegrationId: null, model: "m", llmSource: "tenant_default", mode: "chat", weight: 1 }],
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("validation_error");
+    expect(stub.roleModelsCalls.put).not.toHaveBeenCalled();
+  });
+
+  it("PUT role-models 400s an unknown mode", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const res = await putJson(app, "/skills/sk_1/role-models", {
+      role: "preflight_guard",
+      chain: [{ llmIntegrationId: "tllm_1", model: null, llmSource: "pinned", mode: "judge" }],
+    });
+    expect(res.status).toBe(400);
+    expect(stub.roleModelsCalls.put).not.toHaveBeenCalled();
+  });
+
+  it("GET role-models returns the bare role map the SDK (>= 0.32.1) yields — never a { skillId, roles } wrapper", async () => {
+    const roles = {
+      main: [],
+      preflight_guard: [
+        { skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: "tllm_dec", model: "jev-1.14.0", llmSource: "pinned", mode: "decision" },
+      ],
+      postflight_guard: [],
+      eval_judge: [],
+    };
+    // BaoBox answers { data: { skillId, roles } }; SDK 0.32.1 unwraps to `roles`.
+    const stub = makeStub({ roleModelsGet: async () => roles });
+    const app = makeBff(stub);
+    const res = await app.request("/skills/sk_1/role-models");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual(roles);
+    expect(body).not.toHaveProperty("roles");
+    expect(body).not.toHaveProperty("skillId");
+  });
+
+  it("GET role-models fails closed (502 upstream_error naming the SDK requirement) on the { skillId, roles } wrapper", async () => {
+    const roles = { main: [], preflight_guard: [], postflight_guard: [], eval_judge: [] };
+    const records: AuditRecord[] = [];
+    // What a host gets if it forces @baobox/sdk < 0.32.1 via its own overrides.
+    const stub = makeStub({ roleModelsGet: async () => ({ skillId: "sk_1", roles }) });
+    const app = makeBff(stub, { audit: (r) => void records.push(r) });
+    const res = await app.request("/skills/sk_1/role-models");
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("upstream_error");
+    expect(body.error.message).toMatch(/@baobox\/sdk 0\.32\.1 or later/);
+    expect(records).toContainEqual(expect.objectContaining({ op: "getRoleModels", outcome: "error" }));
+  });
+
+  it("GET role-models fails closed on a map with a missing role or a non-array chain", async () => {
+    for (const bad of [
+      { main: [], preflight_guard: [], postflight_guard: [] },
+      { main: [], preflight_guard: {}, postflight_guard: [], eval_judge: [] },
+    ]) {
+      const stub = makeStub({ roleModelsGet: async () => bad });
+      const res = await makeBff(stub).request("/skills/sk_1/role-models");
+      expect(res.status).toBe(502);
+    }
+  });
+
+  it("GET role-models returns each entry's mode", async () => {
+    const ROLE_MAP = {
+      main: [],
+      preflight_guard: [
+        { skillId: "sk_1", role: "preflight_guard", position: 0, llmIntegrationId: "tllm_dec", model: "jev-1.14.0", llmSource: "pinned", mode: "decision" },
+        { skillId: "sk_1", role: "preflight_guard", position: 1, llmIntegrationId: null, model: "gpt-5.4", llmSource: "tenant_default", mode: "chat" },
+      ],
+      postflight_guard: [],
+      eval_judge: [],
+    };
+    const stub = makeStub({ roleModelsGet: async () => ROLE_MAP });
+    const app = makeBff(stub);
+    const body = (await (await app.request("/skills/sk_1/role-models")).json()) as typeof ROLE_MAP;
+    expect(body.preflight_guard.map((e) => e.mode)).toEqual(["decision", "chat"]);
+  });
+
+  it("GET /skills carries skillKind on each summary (list badge), and leaves it off when the server omits it", async () => {
+    const stub = makeStub({
+      list: async () => [
+        skill("sk_chat"),
+        skill("sk_dec", { skillKind: "decision", decisionSpec }),
+        skill("sk_chat2", { skillKind: "chat", decisionSpec: null }),
+      ],
+    });
+    const app = makeBff(stub);
+    const body = (await (await app.request("/skills")).json()) as { data: Array<Record<string, unknown>> };
+    expect(body.data.map((s) => s.skillKind)).toEqual([undefined, "decision", "chat"]);
+    expect("skillKind" in (body.data[0] ?? {})).toBe(false);
+    // The summary never ships the spec.
+    expect(body.data.some((s) => "decisionSpec" in s)).toBe(false);
+  });
+
+  it("GET /skills/:id passes skillKind + decisionSpec through on the detail", async () => {
+    const stub = makeStub({
+      get: async (id: string) => ({ ...skill(id, { skillKind: "decision", decisionSpec }), files: [] }),
+    });
+    const app = makeBff(stub);
+    const body = (await (await app.request("/skills/sk_dec")).json()) as { data: Record<string, unknown> };
+    expect(body.data.skillKind).toBe("decision");
+    expect(body.data.decisionSpec).toEqual(decisionSpec);
+  });
+
+  it("PUT /skills/:id refuses skillKind / decisionSpec in the body (Studio never writes them)", async () => {
+    const stub = makeStub();
+    const app = makeBff(stub);
+    const res = await putJson(app, "/skills/sk_dec", { decisionSpec });
+    expect(res.status).toBe(400);
+    expect(stub.calls.update).not.toHaveBeenCalled();
+  });
+
+  it("GET /llm-integrations passes a null defaultModel through", async () => {
+    const rows = [
+      { id: "tllm_1", displayName: "Primary", provider: "openai", defaultModel: null, isDefault: true, apiKeyMask: "***", uses: ["chat", "decision"] },
+    ];
+    const stub = makeStub({ llmIntegrationsList: async () => rows });
+    const app = makeBff(stub);
+    const res = await app.request("/llm-integrations");
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { data: unknown[] }).data).toEqual(rows);
   });
 });

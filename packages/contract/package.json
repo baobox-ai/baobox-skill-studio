@@ -1,6 +1,6 @@
 {
   "name": "@baobox/skill-builder-contract",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Shared BFF↔MFE HTTP contract (types + Zod) for the BaoBox Skill Studio. Reuses @baobox/sdk skill types.",
   "license": "MIT",
   "author": "BaoBox Maintainers <opensource@baobox.ai>",
@@ -41,7 +41,7 @@
     "prepublishOnly": "npm run clean && npm run build && npm test"
   },
   "dependencies": {
-    "@baobox/sdk": "^0.29.0",
+    "@baobox/sdk": "^0.32.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

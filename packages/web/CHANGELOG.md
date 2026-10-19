@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.8.0
+
+Decision-skill awareness and working guard chains. Depends on contract
+`^0.8.0` (SDK 0.32.x types; the BFF needs `@baobox/sdk` `^0.32.1`). Refs
+baobox#846.
+
+### Fixed
+
+- **Guard chains now save. They never did before: every save returned 400
+  `invalid_role_model`.** The per-role panel sent
+  `{ llmIntegrationId: null, model, llmSource: "pinned" }`, and BaoBox requires
+  an integration on every `pinned` entry. Guard and main-backup slots now send
+  `{ llmIntegrationId: null, model, llmSource: "tenant_default", mode: "chat" }`:
+  the slot runs on the tenant's default LLM integration, and the chosen model is
+  used when it belongs to that integration's provider (otherwise the
+  integration's default model is used). Each slot's caption says so.
+- A reload no longer wipes unsaved selections. A row re-seeds only when its own
+  stored chain changed by value (saving one role used to reset every sibling
+  row, because each reload returns new arrays). If a row's stored chain did
+  change under an unsaved edit, the edit is replaced with a visible notice.
+- The per-role panel fails closed. It renders rows only from a role map that
+  was loaded and validated (`skillRoleModelsMapSchema`). A failed GET, a
+  payload that is not the role map (e.g. the `{ skillId, roles }` wrapper from
+  an older `@baobox/sdk` behind the BFF), or a failed reload after a save
+  shows the error with a Retry button and no editable row. It used to render
+  empty, editable rows, so a Save could overwrite a stored decision pin.
+- The sub-skill picker on a chat skill no longer offers decision skills; BaoBox
+  refuses them on either side of an attachment (422
+  `decision_skill_no_sub_skills`).
+
+### Added
+
+- A role whose saved chain has a `mode: "decision"` entry is read-only: the
+  selects, Save and Inherit default are disabled, with the note "set in the
+  Portal (decision model)". Studio can't change a decision pin into a chat pin.
+  A chain pinned to a specific integration (or the platform key) is read-only
+  for the same reason, and so are chains on the platform key or on the
+  integration's default model (`model: null`); the note names which. The
+  status line marks decision entries.
+- Decision skills (`skillKind: "decision"`): a `decision` badge in the list and
+  on the skill page; the system prompt is labelled **Preamble** with a 4000
+  character counter (save is blocked above it); the question spec is shown
+  read-only as JSON. The model / integration picker, temperature / max tokens /
+  reasoning effort, tools, sub-skills, main backup and postflight guard rows are
+  hidden (BaoBox refuses each with a 422 on a decision skill). Only the
+  preflight guard row remains. A save sends only the changed name /
+  description / preamble.
+
 ## 0.7.1
 
 Metadata refresh, no API change.

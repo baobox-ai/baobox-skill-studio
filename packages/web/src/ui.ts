@@ -76,3 +76,20 @@ export function labelStyle(): CSS {
 export function sectionTitle(): CSS {
   return { fontSize: "0.95rem", fontWeight: 600, margin: "1.25rem 0 0.5rem" };
 }
+
+/** Small pill badge (e.g. the `decision` skill-kind badge). */
+export function badgeStyle(p: Palette): CSS {
+  return {
+    display: "inline-block",
+    marginLeft: "0.4rem",
+    padding: "0.05rem 0.4rem",
+    borderRadius: "999px",
+    border: `1px solid ${p.accent}`,
+    color: p.accent,
+    fontSize: "0.7rem",
+    fontWeight: 600,
+    letterSpacing: "0.03em",
+    textTransform: "uppercase",
+    verticalAlign: "middle",
+  };
+}

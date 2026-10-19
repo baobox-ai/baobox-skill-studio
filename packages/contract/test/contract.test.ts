@@ -1,8 +1,14 @@
-import type { ModelRole, Skill, SkillWithFiles } from "@baobox/sdk";
+import type { DecisionSkillSpec, LlmIntegration, ModelRole, Skill, SkillWithFiles } from "@baobox/sdk";
 import { describe, expect, it } from "vitest";
 import {
   MODEL_ROLES,
   REASONING_EFFORT_VALUES,
+  ROLE_MODEL_MODES,
+  SKILL_KINDS,
+  isDecisionSkill,
+  listLlmIntegrationsResponseSchema,
+  llmIntegrationSchema,
+  skillRoleModelsMapSchema,
   attachSubSkillRequestSchema,
   attachToolRequestSchema,
   contractErrorSchema,
@@ -436,10 +442,10 @@ describe("modelRoleSchema (#328)", () => {
 });
 
 describe("putRoleModelsRequestSchema (#328)", () => {
-  it("accepts a valid put body with a pinned chain entry", () => {
+  it("accepts a valid put body with a tenant-default chain entry (what Studio sends)", () => {
     const r = putRoleModelsRequestSchema.safeParse({
       role: "preflight_guard",
-      chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "pinned" }],
+      chain: [{ llmIntegrationId: null, model: "openai/gpt-5", llmSource: "tenant_default", mode: "chat" }],
     });
     expect(r.success).toBe(true);
   });
@@ -450,7 +456,7 @@ describe("putRoleModelsRequestSchema (#328)", () => {
   });
 
   it("accepts a chain of up to 4 entries", () => {
-    const entry = { llmIntegrationId: null, model: "openai/gpt-4o", llmSource: "pinned" as const };
+    const entry = { llmIntegrationId: null, model: "openai/gpt-4o", llmSource: "tenant_default" as const };
     const r = putRoleModelsRequestSchema.safeParse({
       role: "postflight_guard",
       chain: [entry, entry, entry, entry],
@@ -459,7 +465,7 @@ describe("putRoleModelsRequestSchema (#328)", () => {
   });
 
   it("rejects a chain exceeding 4 entries", () => {
-    const entry = { llmIntegrationId: null, model: "m", llmSource: "pinned" as const };
+    const entry = { llmIntegrationId: null, model: "m", llmSource: "tenant_default" as const };
     const r = putRoleModelsRequestSchema.safeParse({
       role: "preflight_guard",
       chain: [entry, entry, entry, entry, entry],
@@ -514,5 +520,182 @@ describe("contractErrorSchema", () => {
     expect(
       contractErrorSchema.safeParse({ error: { code: "teapot", message: "x" } }).success,
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.8.0 — SDK 0.32.0 surfaces (baobox#846): role-model `mode`, decision skills,
+// nullable integration `defaultModel`.
+// ---------------------------------------------------------------------------
+
+const decisionSpec: DecisionSkillSpec = {
+  version: 1,
+  questions: [
+    { id: "urgent", type: "boolean", prompt: "Is the message urgent?" },
+    {
+      id: "topic",
+      type: "choice",
+      prompt: "What is it about?",
+      options: [
+        { value: "billing", description: "Invoices and payments" },
+        { value: "other", description: "Anything else" },
+      ],
+    },
+  ],
+  state: { history: 0 },
+};
+
+const sdkDecisionSkill: SkillWithFiles = {
+  ...sdkSkillWithFiles,
+  id: "sk_decide",
+  systemPrompt: "Triage inbound support email.",
+  skillKind: "decision",
+  decisionSpec,
+  files: [],
+};
+
+describe("roleModelChainEntrySchema — mode (0.8.0)", () => {
+  it("accepts mode: chat and mode: decision on an entry", () => {
+    for (const mode of ROLE_MODEL_MODES) {
+      const r = putRoleModelsRequestSchema.safeParse({
+        role: "preflight_guard",
+        chain: [{ llmIntegrationId: "tllm_1", model: null, llmSource: "pinned", mode }],
+      });
+      expect(r.success).toBe(true);
+      if (r.success) expect(r.data.chain[0]?.mode).toBe(mode);
+    }
+  });
+
+  it("keeps an omitted mode omitted (no default injected — the server infers it)", () => {
+    const r = putRoleModelsRequestSchema.parse({
+      role: "preflight_guard",
+      chain: [{ llmIntegrationId: "tllm_1", model: "gpt-5.4", llmSource: "pinned" }],
+    });
+    expect("mode" in (r.chain[0] ?? {})).toBe(false);
+  });
+
+  it("rejects an unknown mode", () => {
+    const r = putRoleModelsRequestSchema.safeParse({
+      role: "preflight_guard",
+      chain: [{ llmIntegrationId: "tllm_1", model: null, llmSource: "pinned", mode: "judge" }],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("is still .strict(): an unknown key on a chain entry is rejected", () => {
+    const r = putRoleModelsRequestSchema.safeParse({
+      role: "preflight_guard",
+      chain: [{ llmIntegrationId: null, model: "m", llmSource: "tenant_default", mode: "chat", position: 0 }],
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe("decision skills in the read schemas (0.8.0)", () => {
+  it("SKILL_KINDS mirrors the SDK kinds", () => {
+    expect([...SKILL_KINDS]).toEqual(["chat", "decision"]);
+  });
+
+  it("skillDetailSchema keeps skillKind + decisionSpec on parse (not stripped)", () => {
+    const parsed = skillDetailSchema.parse(sdkDecisionSkill);
+    expect(parsed.skillKind).toBe("decision");
+    expect(parsed.decisionSpec).toEqual(decisionSpec);
+  });
+
+  it("skillDetailSchema accepts a chat skill with decisionSpec: null, and one without either field (older server)", () => {
+    expect(skillDetailSchema.safeParse({ ...sdkSkillWithFiles, skillKind: "chat", decisionSpec: null }).success).toBe(true);
+    const parsed = skillDetailSchema.parse(sdkSkillWithFiles);
+    expect(parsed.skillKind).toBeUndefined();
+    expect("decisionSpec" in parsed).toBe(false);
+  });
+
+  it("skillDetailSchema rejects an unknown kind and a non-object spec", () => {
+    expect(skillDetailSchema.safeParse({ ...sdkSkillWithFiles, skillKind: "agent" }).success).toBe(false);
+    expect(skillDetailSchema.safeParse({ ...sdkSkillWithFiles, decisionSpec: "yes" }).success).toBe(false);
+    expect(skillDetailSchema.safeParse({ ...sdkSkillWithFiles, decisionSpec: [] }).success).toBe(false);
+  });
+
+  it("toSkillSummary carries skillKind for the list badge, and omits it when the server did not send it", () => {
+    const summary = toSkillSummary(sdkDecisionSkill);
+    expect(summary.skillKind).toBe("decision");
+    expect(skillSummarySchema.parse(summary)).toEqual(summary);
+    // The summary never ships the spec (lean list rows).
+    expect("decisionSpec" in summary).toBe(false);
+    expect("skillKind" in toSkillSummary(sdkSkill)).toBe(false);
+  });
+
+  it("isDecisionSkill treats an absent kind as chat", () => {
+    expect(isDecisionSkill(sdkDecisionSkill)).toBe(true);
+    expect(isDecisionSkill(sdkSkill)).toBe(false);
+    expect(isDecisionSkill({ skillKind: "chat" })).toBe(false);
+  });
+
+  it("the update/create request schemas stay strict and do NOT accept skillKind / decisionSpec", () => {
+    expect(skillStructuralUpdateRequestSchema.safeParse({ skillKind: "decision" }).success).toBe(false);
+    expect(skillStructuralUpdateRequestSchema.safeParse({ decisionSpec }).success).toBe(false);
+    expect(skillUpdateRequestSchema.safeParse({ decisionSpec }).success).toBe(false);
+    expect(
+      skillCreateRequestSchema.safeParse({ name: "x", systemPrompt: "y", skillKind: "decision" }).success,
+    ).toBe(false);
+  });
+});
+
+describe("llmIntegrationSchema — nullable defaultModel (0.8.0)", () => {
+  const row: LlmIntegration = {
+    id: "tllm_1",
+    displayName: "Primary",
+    provider: "openai",
+    defaultModel: null,
+    isDefault: true,
+    apiKeyMask: "***",
+  };
+
+  it("accepts defaultModel: null (SDK 0.32.0 widening)", () => {
+    expect(llmIntegrationSchema.safeParse(row).success).toBe(true);
+    expect(listLlmIntegrationsResponseSchema.safeParse({ data: [row] }).success).toBe(true);
+  });
+
+  it("still accepts a string defaultModel and still requires the key", () => {
+    expect(llmIntegrationSchema.safeParse({ ...row, defaultModel: "gpt-5.4" }).success).toBe(true);
+    const { defaultModel: _d, ...missing } = row;
+    expect(llmIntegrationSchema.safeParse(missing).success).toBe(false);
+  });
+});
+
+describe("skillRoleModelsMapSchema — the GET role-models shape (fail closed)", () => {
+  const entry = {
+    skillId: "sk_1",
+    role: "preflight_guard",
+    position: 0,
+    llmIntegrationId: "tllm_dec",
+    model: "jev-1.14.0",
+    llmSource: "pinned",
+    mode: "decision",
+  };
+  const map = { main: [], preflight_guard: [entry], postflight_guard: [], eval_judge: [] };
+
+  it("accepts the bare role map and keeps server fields (skillId/role/position) on parse", () => {
+    const r = skillRoleModelsMapSchema.safeParse(map);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.preflight_guard[0]).toEqual(entry);
+  });
+
+  it("rejects the { skillId, roles } wrapper an older @baobox/sdk returned", () => {
+    expect(skillRoleModelsMapSchema.safeParse({ skillId: "sk_1", roles: map }).success).toBe(false);
+  });
+
+  it("rejects a missing role, a non-array chain, an unknown mode or llmSource, and a missing entry field", () => {
+    const { eval_judge: _e, ...missing } = map;
+    expect(skillRoleModelsMapSchema.safeParse(missing).success).toBe(false);
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, main: null }).success).toBe(false);
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, preflight_guard: [{ ...entry, mode: "judge" }] }).success).toBe(false);
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, preflight_guard: [{ ...entry, llmSource: "byok" }] }).success).toBe(false);
+    const { model: _m, ...noModel } = entry;
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, preflight_guard: [noModel] }).success).toBe(false);
+  });
+
+  it("accepts an entry without mode (older server) — the panel then treats it as chat", () => {
+    const { mode: _mode, ...noMode } = entry;
+    expect(skillRoleModelsMapSchema.safeParse({ ...map, preflight_guard: [noMode] }).success).toBe(true);
   });
 });

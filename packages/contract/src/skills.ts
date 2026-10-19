@@ -1,4 +1,14 @@
-import type { IntegrationModelsView, LlmIntegration, ModelRole, Skill, SkillFileReference, SkillWithFiles } from "@baobox/sdk";
+import type {
+  DecisionSkillSpec,
+  IntegrationModelsView,
+  LlmIntegration,
+  ModelRole,
+  RoleModelMode,
+  Skill,
+  SkillFileReference,
+  SkillKind,
+  SkillWithFiles,
+} from "@baobox/sdk";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -9,9 +19,20 @@ import { z } from "zod";
 export type {
   ModelRole,
   RoleModelChainEntry,
+  RoleModelMode,
   SkillRoleModel,
   SkillRoleModelsMap,
 } from "@baobox/sdk";
+
+/**
+ * How a role-model entry runs (SDK 0.32.0 / baobox#837): `"chat"` (an LLM
+ * call; every entry Studio builds) or `"decision"` (a decision model — guard
+ * roles only, set in the BaoBox Portal). Const tuple for `z.enum`; the drift
+ * guard below keeps it in sync with the SDK's `RoleModelMode`.
+ */
+export const ROLE_MODEL_MODES = ["chat", "decision"] as const;
+const _roleModelModesTrackSdk = ((): readonly RoleModelMode[] => ROLE_MODEL_MODES)();
+void _roleModelModesTrackSdk;
 
 /**
  * The four roles the server supports. Re-declared as a const tuple so the
@@ -36,14 +57,30 @@ export const modelRoleSchema = z.enum(MODEL_ROLES);
 
 /**
  * A single entry in a role's chain as supplied in a PUT request.
- * Studio sends `{ llmIntegrationId: null, model, llmSource: "pinned" }` for
- * catalog-pinned entries (no off-box integration in Studio scope).
+ *
+ * Studio has no integration picker on its guard slots, so it sends
+ * `{ llmIntegrationId: null, model, llmSource: "tenant_default", mode: "chat" }`:
+ * the entry runs on the tenant's default LLM integration, with `model` honoured
+ * when it belongs to that integration's provider (otherwise the integration's
+ * default model is used).
+ *
+ * Server rules worth knowing (BaoBox enforces them; this schema stays a shape
+ * check so it can't drift from the server):
+ * - `llmSource: "pinned"` REQUIRES an `llmIntegrationId` — `pinned` with a
+ *   null integration is a 400 `invalid_role_model`.
+ * - `mode` (SDK 0.32.0) is optional; omitted ⇒ the server infers it (a stored
+ *   entry on the same integration keeps its mode, else `"chat"`).
+ *   `mode: "decision"` is accepted on the guard roles only, and only as a
+ *   `pinned` entry on a decision-capable integration (422 otherwise).
+ *
+ * `.strict()` is kept: an unknown key is a 400 at the BFF.
  */
 export const roleModelChainEntrySchema = z
   .object({
     llmIntegrationId: z.string().nullable(),
     model: z.string().nullable(),
     llmSource: z.enum(["tenant_default", "platform", "pinned"]),
+    mode: z.enum(ROLE_MODEL_MODES).optional(),
   })
   .strict();
 
@@ -55,6 +92,45 @@ export const putRoleModelsRequestSchema = z
   })
   .strict();
 export type PutRoleModelsRequest = z.infer<typeof putRoleModelsRequestSchema>;
+
+/**
+ * One stored entry as `GET /skills/:id/role-models` returns it. Only the fields
+ * Studio decides on are required (the read-only rule looks at all four); the
+ * server's `skillId` / `role` / `position` pass through untouched. An unknown
+ * `llmSource` or `mode` fails the parse on purpose: Studio must not edit a
+ * chain it does not understand.
+ */
+export const storedRoleModelEntrySchema = z
+  .object({
+    llmIntegrationId: z.string().nullable(),
+    model: z.string().nullable(),
+    llmSource: z.enum(["tenant_default", "platform", "pinned"]),
+    mode: z.enum(ROLE_MODEL_MODES).optional(),
+  })
+  .passthrough();
+
+/**
+ * `GET /skills/:id/role-models` response: the bare role → chain map, every role
+ * present (an empty array = inherits the tenant default). Non-strict so a
+ * future role is tolerated, but all four known roles are required — the
+ * `{ skillId, roles }` wrapper that `@baobox/sdk` < 0.32.1 returned does NOT
+ * parse. The BFF validates the SDK output with this and the Web Component
+ * validates the BFF response with it; a failure is a load error (fail closed),
+ * never "empty chains".
+ */
+export const skillRoleModelsMapSchema = z
+  .object({
+    main: z.array(storedRoleModelEntrySchema),
+    preflight_guard: z.array(storedRoleModelEntrySchema),
+    postflight_guard: z.array(storedRoleModelEntrySchema),
+    eval_judge: z.array(storedRoleModelEntrySchema),
+  })
+  .passthrough();
+
+/** Message for a role-model payload that is not the role map. */
+export const ROLE_MODELS_SHAPE_ERROR =
+  "Role-model data is not the expected role map, so Studio will not edit any role. " +
+  "The Skill Studio BFF needs @baobox/sdk 0.32.1 or later (check any overrides[\"@baobox/sdk\"] in the host app).";
 
 // ---------------------------------------------------------------------------
 // Reasoning effort — the new optional parameter for reasoning-class models
@@ -75,7 +151,32 @@ export const reasoningEffortSchema = z.enum(REASONING_EFFORT_VALUES);
 // Note: `@baobox/sdk`'s wire `Skill` uses `id` (not the worker's internal
 // `skillId`) and is intentionally lean (no guardrail / attachment columns).
 // This contract mirrors that wire shape exactly.
-export type { Skill, SkillFileReference, SkillWithFiles } from "@baobox/sdk";
+export type { DecisionSkillSpec, Skill, SkillFileReference, SkillKind, SkillWithFiles } from "@baobox/sdk";
+
+/**
+ * What a skill is (SDK 0.32.0 / baobox#837). `"chat"` writes text on a chat
+ * model; `"decision"` answers the typed questions in `decisionSpec` on a
+ * decision model. Absent on servers that predate decision skills — treat absent
+ * as `"chat"`. Immutable after create; Studio never writes it.
+ */
+export const SKILL_KINDS = ["chat", "decision"] as const;
+const _skillKindsTrackSdk = ((): readonly SkillKind[] => SKILL_KINDS)();
+void _skillKindsTrackSdk;
+export const skillKindSchema = z.enum(SKILL_KINDS);
+
+/** `true` iff the skill is a decision skill (absent kind = chat). */
+export function isDecisionSkill(skill: { skillKind?: SkillKind | null }): boolean {
+  return skill.skillKind === "decision";
+}
+
+// A decision skill's question spec. The contract does not re-validate it (the
+// BaoBox server is the validator and Studio renders it read-only); it only
+// requires an object or null and carries the SDK's `DecisionSkillSpec` type so
+// the drift guards below stay exact.
+const decisionSpecSchema = z.custom<DecisionSkillSpec | null>(
+  (v) => v === null || (typeof v === "object" && !Array.isArray(v)),
+  { message: "decisionSpec must be an object or null" },
+);
 
 // ---------------------------------------------------------------------------
 // List item — a lean projection of `Skill` for the list view, so the list
@@ -89,6 +190,9 @@ export const skillSummarySchema = z.object({
   model: z.string(),
   tenantId: z.string().nullable(),
   updatedAt: z.string(),
+  // 0.8.0 — the list badge. Optional: absent on servers that predate
+  // decision skills (= chat).
+  skillKind: skillKindSchema.optional(),
 });
 export type SkillSummary = z.infer<typeof skillSummarySchema>;
 
@@ -102,10 +206,12 @@ const _summaryIsSkillSubset = (s: Skill): SkillSummary => ({
   model: s.model,
   tenantId: s.tenantId,
   updatedAt: s.updatedAt,
+  skillKind: s.skillKind,
 });
 void _summaryIsSkillSubset;
 
-// Project a full skill down to the list summary.
+// Project a full skill down to the list summary. `skillKind` is copied only
+// when the server sent it, so an older server's summary keeps its exact shape.
 export function toSkillSummary(skill: Skill): SkillSummary {
   return {
     id: skill.id,
@@ -114,6 +220,7 @@ export function toSkillSummary(skill: Skill): SkillSummary {
     model: skill.model,
     tenantId: skill.tenantId,
     updatedAt: skill.updatedAt,
+    ...(skill.skillKind ? { skillKind: skill.skillKind } : {}),
   };
 }
 
@@ -156,6 +263,10 @@ export const skillDetailSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   files: z.array(skillFileReferenceSchema),
+  // 0.8.0 (SDK 0.32.0) — decision skills. Both optional: absent on servers
+  // that predate them. `decisionSpec` is null on every chat skill.
+  skillKind: skillKindSchema.optional(),
+  decisionSpec: decisionSpecSchema.optional(),
 });
 
 // Compile-time drift guards — schema ⇄ SDK, BOTH directions:
@@ -502,7 +613,9 @@ const _sdkIntegrationGuard = (i: LlmIntegration): {
   id: string;
   displayName: string;
   provider: string;
-  defaultModel: string;
+  // SDK 0.32.0 widened this to `string | null` (the server has always allowed
+  // a row with no default model; decision-only rows always carry null).
+  defaultModel: string | null;
   isDefault: boolean;
   apiKeyMask: string;
 } => i;
@@ -513,7 +626,7 @@ export const llmIntegrationSchema = z.object({
   id: z.string(),
   displayName: z.string(),
   provider: z.string(),
-  defaultModel: z.string(),
+  defaultModel: z.string().nullable(),
   isDefault: z.boolean(),
   apiKeyMask: z.string(),
 });
