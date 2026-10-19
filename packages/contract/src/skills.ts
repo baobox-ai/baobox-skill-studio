@@ -502,7 +502,9 @@ const _sdkIntegrationGuard = (i: LlmIntegration): {
   id: string;
   displayName: string;
   provider: string;
-  defaultModel: string;
+  // SDK 0.32.0 widened this to `string | null` (the server has always allowed
+  // a row with no default model; decision-only rows always carry null).
+  defaultModel: string | null;
   isDefault: boolean;
   apiKeyMask: string;
 } => i;
@@ -513,7 +515,7 @@ export const llmIntegrationSchema = z.object({
   id: z.string(),
   displayName: z.string(),
   provider: z.string(),
-  defaultModel: z.string(),
+  defaultModel: z.string().nullable(),
   isDefault: z.boolean(),
   apiKeyMask: z.string(),
 });
